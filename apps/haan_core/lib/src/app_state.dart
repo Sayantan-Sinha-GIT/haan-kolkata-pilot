@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'api.dart';
 import 'push.dart';
 
@@ -14,13 +15,22 @@ class HaanState extends ChangeNotifier {
   bool updateRequired = false;
   Map<String,dynamic>? profile;
   Future<void> init() async {
-    final prefs=await SharedPreferences.getInstance();
-    language=prefs.getString('language')??'en';
-    themeMode=switch(prefs.getString('theme')){'light'=>ThemeMode.light,'system'=>ThemeMode.system,_=>ThemeMode.dark};
-    await api.load(); signedIn=api.isSignedIn;
-    try { final config=await api.get('/v1/config');updateRequired=(config['minimum_versions']?[role] as num? ?? 1)>1; } catch (_) {}
-    if(signedIn) { try { await refreshProfile(); await registerPush(api); } catch (_) {} }
-    ready=true; notifyListeners();
+    try {
+      try {
+        final prefs=await SharedPreferences.getInstance();
+        language=prefs.getString('language')??'en';
+        themeMode=switch(prefs.getString('theme')){'light'=>ThemeMode.light,'system'=>ThemeMode.system,_=>ThemeMode.dark};
+      } catch (_) { /* Local display preferences must not block sign-in. */ }
+      try { await api.load(); signedIn=api.isSignedIn; } catch (_) { signedIn=false; }
+      try {
+        final config=await api.get('/v1/config');
+        final installed=int.tryParse((await PackageInfo.fromPlatform()).buildNumber)??1;
+        // Flutter split APKs prefix the base build number with an ABI code.
+        final build=installed>=1000?installed%1000:installed;
+        updateRequired=(config['minimum_versions']?[role] as num? ?? 1)>build;
+      } catch (_) {}
+      if(signedIn) { try { await refreshProfile(); await registerPush(api); } catch (_) {} }
+    } finally { ready=true; notifyListeners(); }
   }
   Future<void> refreshProfile() async {
     final result=await api.get('/v1/profile');
@@ -35,11 +45,13 @@ class HaanState extends ChangeNotifier {
   }
   Future<void> logout() async { await api.signOut(); signedIn=false;profile=null;notifyListeners(); }
   Future<void> setLanguage(String value) async {
-    language=value; final prefs=await SharedPreferences.getInstance();await prefs.setString('language',value);notifyListeners();
+    language=value;notifyListeners();
+    try { final prefs=await SharedPreferences.getInstance();await prefs.setString('language',value); } catch (_) {}
     if(signedIn) await api.patch('/v1/profile',{'language':value});
   }
   Future<void> setTheme(ThemeMode value) async {
-    themeMode=value;final prefs=await SharedPreferences.getInstance();await prefs.setString('theme',value.name);notifyListeners();
+    themeMode=value;notifyListeners();
+    try { final prefs=await SharedPreferences.getInstance();await prefs.setString('theme',value.name); } catch (_) {}
     if(signedIn) await api.patch('/v1/profile',{'theme':value.name});
   }
   String tr(String key) => words[language]?[key] ?? words['en']?[key] ?? key;

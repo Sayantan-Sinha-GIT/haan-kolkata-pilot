@@ -1,7 +1,7 @@
 name: haan_rider
 description: Haan rider Android app.
 publish_to: none
-version: 1.0.0+1
+version: 1.0.1+2
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:
@@ -19,6 +19,8 @@ dependencies:
   firebase_messaging: ^15.2.10
   flutter_background_service: ^5.1.0
   flutter_background_service_android: ^6.3.0
+dependency_overrides:
+  shared_preferences_android: 2.4.28
 dev_dependencies:
   flutter_test:
     sdk: flutter

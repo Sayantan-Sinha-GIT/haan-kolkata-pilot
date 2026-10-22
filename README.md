@@ -16,7 +16,7 @@ The site and apps are **pilot software**. Real commercial operation needs local 
 
 ## Current infrastructure
 
-The [public site](https://haan-kolkata-pilot.pages.dev/) and [Worker API](https://haan-api.srimantasutapa123.workers.dev/health) are deployed. The `haan-kolkata-pilot` Neon project has a `production` branch with the schema and a `development` branch with inert test users. The owner super admin is provisioned; credentials remain in the ignored `secrets/admin-onboarding.txt` until enrolled in an authenticator. Both signed Android 8+ arm64 APKs passed CI and signature verification and are temporarily served from Cloudflare Pages so the install links and QR codes work. No live OTP, AI, push, or public pilot launch should be claimed until the related provider keys are configured and tested. See [PROVIDER_SETUP.md](PROVIDER_SETUP.md) for the new key setup.
+The [public site](https://haan-kolkata-pilot.pages.dev/) and [Worker API](https://haan-api.srimantasutapa123.workers.dev/health) are deployed. The `haan-kolkata-pilot` Neon project has a `production` branch with the schema and a `development` branch with inert test users. The owner super admin is provisioned; credentials remain in the ignored `secrets/admin-onboarding.txt` until enrolled in an authenticator. The first signed Android build exposed a third-party `shared_preferences_android` release crash in emulator testing. Downloads are disabled while version 1.0.1 is rebuilt and verified. No live OTP, AI, push, or public pilot launch should be claimed until the related provider keys are configured and tested. See [PROVIDER_SETUP.md](PROVIDER_SETUP.md) for the new key setup.
 
 ## Local checks
 
@@ -28,7 +28,7 @@ cd apps/customer && flutter pub get && flutter analyze --no-fatal-infos
 cd ../rider && flutter pub get && flutter analyze --no-fatal-infos
 ```
 
-The website is static: serve `web/` with any local HTTP server. Set `web/config.json` to the deployed Worker URL for the admin console. `web/links.json` currently points to versioned APK assets in `web/downloads/` (ignored by Git); the page generates its QR codes from those exact URLs. Replace the links with personal Drive URLs after uploading the APKs and the release signing key backup there.
+The website is static: serve `web/` with any local HTTP server. Set `web/config.json` to the deployed Worker URL for the admin console. `web/links.json` remains blank until the rebuilt APKs pass emulator smoke testing. It then points to versioned APK assets in `web/downloads/` (ignored by Git); the page generates its QR codes from those exact URLs. Replace the links with personal Drive URLs after uploading the APKs and the release signing key backup there.
 
 ## Secrets and build values
 
@@ -43,7 +43,7 @@ Build values are passed to Flutter using `--dart-define`: `API_BASE_URL`, `DOWNL
 3. Configure nonzero free-tier quotas and Worker secrets, then deploy the Worker and verify `/health` and the fare endpoint. The quotas stop provider calls at 80% of the configured daily allowance. Database, session, and admin TOTP secrets are already set in the deployed Worker.
 4. Set `APP_ORIGIN` to the exact Cloudflare Pages origin. Configure the same Worker URL in `web/config.json`.
 5. Enroll the already-created super admin in an authenticator and verify the `/4632/admin/` console. A live TOTP login and dashboard request have passed. The path is only obscurity; backend password, TOTP, role checks, 30-minute idle timeout and audit log enforce security.
-6. Both apps have been built with one fixed release signing key. Back the key up securely. Upload signed arm64 APKs to a personal Drive with public download links, then update `web/links.json` and recheck both QR codes. The current Pages links are temporary until Drive is connected.
+6. Build and emulator-test both apps with one fixed release signing key. Back the key up securely. Upload signed arm64 APKs to a personal Drive with public download links, then update `web/links.json` and recheck both QR codes. Pages can host verified APKs temporarily until Drive is connected.
 7. Deploy `web/` to Cloudflare Pages. Check a fresh Android 8+ device, two-phone trip, Hindi/English flows, weak/offline behavior and Lighthouse before inviting pilot users.
 
 ## Design credits
