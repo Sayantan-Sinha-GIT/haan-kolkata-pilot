@@ -34,9 +34,9 @@ class HaanCustomer extends StatelessWidget {
                   ? UpdateRequired(app)
               : app.signedIn
                   ? ('${app.profile?['name'] ?? ''}'.trim().isEmpty
-                      ? const NameSetup()
-                      : const CustomerShell())
-                  : const SignIn()));
+                      ? NameSetup()
+                      : CustomerShell())
+                  : SignIn()));
 }
 
 class NameSetup extends StatefulWidget {
@@ -186,7 +186,7 @@ class _CustomerShellState extends State<CustomerShell> {
   int tab = 0;
   @override
   Widget build(BuildContext context) => Scaffold(
-      body: IndexedStack(index: tab, children: const [
+      body: IndexedStack(index: tab, children: [
         RideHome(),
         TripHistory(),
         CustomerHelp(),

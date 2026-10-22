@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -22,15 +23,20 @@ class HaanState extends ChangeNotifier {
         themeMode=switch(prefs.getString('theme')){'light'=>ThemeMode.light,'system'=>ThemeMode.system,_=>ThemeMode.dark};
       } catch (_) { /* Local display preferences must not block sign-in. */ }
       try { await api.load(); signedIn=api.isSignedIn; } catch (_) { signedIn=false; }
-      try {
-        final config=await api.get('/v1/config');
-        final installed=int.tryParse((await PackageInfo.fromPlatform()).buildNumber)??1;
-        // Flutter split APKs prefix the base build number with an ABI code.
-        final build=installed>=1000?installed%1000:installed;
-        updateRequired=(config['minimum_versions']?[role] as num? ?? 1)>build;
-      } catch (_) {}
+      // The sign-in screen can open while the remote version check runs.
+      unawaited(_checkUpdate());
       if(signedIn) { try { await refreshProfile(); await registerPush(api); } catch (_) {} }
     } finally { ready=true; notifyListeners(); }
+  }
+  Future<void> _checkUpdate() async {
+    try {
+      final config=await api.get('/v1/config');
+      final installed=int.tryParse((await PackageInfo.fromPlatform()).buildNumber)??1;
+      // Flutter split APKs prefix the base build number with an ABI code.
+      final build=installed>=1000?installed%1000:installed;
+      updateRequired=(config['minimum_versions']?[role] as num? ?? 1)>build;
+      notifyListeners();
+    } catch (_) { /* A network error must not block the installed app. */ }
   }
   Future<void> refreshProfile() async {
     final result=await api.get('/v1/profile');

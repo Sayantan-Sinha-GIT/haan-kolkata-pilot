@@ -34,8 +34,8 @@ class HaanRider extends StatelessWidget {
               : app.updateRequired
                   ? UpdateRequired(app)
               : app.signedIn
-                  ? const RiderShell()
-                  : const RiderSignIn()));
+                  ? RiderShell()
+                  : RiderSignIn()));
 }
 
 class RiderSignIn extends StatefulWidget {
@@ -137,7 +137,7 @@ class _RiderShellState extends State<RiderShell> {
   Widget build(BuildContext context) => ValueListenableBuilder<bool>(
       valueListenable: incomingOffer,
       builder: (context, offering, _) => Scaffold(
-      body: IndexedStack(index: offering ? 0 : tab, children: const [
+      body: IndexedStack(index: offering ? 0 : tab, children: [
         RiderHome(),
         RiderEarnings(),
         RiderHistory(),
