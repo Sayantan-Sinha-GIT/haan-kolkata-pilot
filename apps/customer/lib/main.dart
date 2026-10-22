@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:latlong2/latlong.dart';
@@ -32,8 +33,39 @@ class HaanCustomer extends StatelessWidget {
               : app.updateRequired
                   ? UpdateRequired(app)
               : app.signedIn
-                  ? const CustomerShell()
+                  ? ('${app.profile?['name'] ?? ''}'.trim().isEmpty
+                      ? const NameSetup()
+                      : const CustomerShell())
                   : const SignIn()));
+}
+
+class NameSetup extends StatefulWidget {
+  const NameSetup({super.key});
+  @override State<NameSetup> createState()=>_NameSetupState();
+}
+class _NameSetupState extends State<NameSetup> {
+  final name=TextEditingController();
+  bool busy=false;
+  String? error;
+  @override void dispose(){name.dispose();super.dispose();}
+  Future<void> save() async {
+    if(name.text.trim().length<2){setState(()=>error=app.language=='hi'?'कम से कम दो अक्षर लिखें।':'Enter at least two letters.');return;}
+    setState((){busy=true;error=null;});
+    try { await app.api.patch('/v1/profile',{'name':name.text.trim()}); await app.refreshProfile(); }
+    catch(e){if(mounted)setState(()=>error='$e');}
+    finally{if(mounted)setState(()=>busy=false);}
+  }
+  @override Widget build(BuildContext context)=>Scaffold(body:SafeArea(child:Padding(
+    padding:const EdgeInsets.all(26),
+    child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      const Spacer(),const Icon(Icons.location_on,color:amber,size:44),
+      const SizedBox(height:20),HaanHeading(app.language=='hi'?'पहले, आपका नाम।':'First, your name.'),
+      const SizedBox(height:18),Text(app.language=='hi'?'राइडर आपको इसी नाम से पहचानेंगे।':'Your rider will recognise you by this name.'),
+      const SizedBox(height:24),TextField(controller:name,maxLength:80,textCapitalization:TextCapitalization.words,decoration:InputDecoration(labelText:app.tr('yourName'))),
+      if(error!=null)HaanError(error!),
+      const SizedBox(height:12),HaanButton(busy?'…':app.tr('continue'),onPressed:busy?null:save),
+      const Spacer(),TextButton(onPressed:()=>app.logout(),child:Text(app.tr('logout'))),
+    ]))));
 }
 
 class SignIn extends StatefulWidget {
@@ -370,6 +402,27 @@ class _RideHomeState extends State<RideHome> {
     }
   }
 
+  Future<void> _shareTrip() async {
+    final emergency='${app.profile?['emergency_phone'] ?? ''}'.trim();
+    if (emergency.isEmpty) {
+      showMessage(context, app.language=='hi'
+          ? 'पहले प्रोफ़ाइल में आपातकालीन संपर्क जोड़ें।'
+          : 'Add an emergency contact in Profile first.');
+      return;
+    }
+    try {
+      final result=await app.api.get('/v1/trips/${trip!['id']}/share');
+      final url='${result['url']}';
+      final sms=Uri(scheme:'sms',path:emergency,queryParameters:{'body':'Haan live trip: $url'});
+      if (!await launchUrl(sms,mode:LaunchMode.externalApplication)) {
+        await Clipboard.setData(ClipboardData(text:url));
+        if (mounted) showMessage(context, app.language=='hi'?'लिंक कॉपी हुआ। अपने संपर्क को भेजें।':'Link copied. Send it to your contact.');
+      }
+    } catch (e) {
+      if (mounted) showMessage(context,'$e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = '${trip?['status'] ?? ''}';
@@ -574,15 +627,14 @@ class _RideHomeState extends State<RideHome> {
             '${app.tr('fare')}: ₹${trip?['final_rupees'] ?? trip?['estimate_rupees'] ?? ''}'),
         if (status != 'in_progress')
           TextButton(onPressed: _cancel, child: Text(app.tr('cancel'))),
-        if (status == 'in_progress')
+        if (['accepted','arrived','in_progress'].contains(status))
           Row(children: [
             TextButton.icon(
                 onPressed: () => launchUrl(Uri.parse('tel:112')),
                 icon: const Icon(Icons.sos),
                 label: Text(app.tr('sos'))),
             TextButton.icon(
-                onPressed: () => showMessage(context,
-                    'Share the trip ID ${trip?['id']} with your emergency contact.'),
+                onPressed: _shareTrip,
                 icon: const Icon(Icons.share),
                 label: Text(app.tr('share')))
           ]),
@@ -1175,7 +1227,7 @@ class CustomerProfile extends StatefulWidget {
 }
 
 class _CustomerProfileState extends State<CustomerProfile> {
-  final name = TextEditingController(), phone = TextEditingController();
+  final name = TextEditingController(), phone = TextEditingController(), emergency = TextEditingController();
   bool loaded = false;
   @override
   void didChangeDependencies() {
@@ -1183,6 +1235,7 @@ class _CustomerProfileState extends State<CustomerProfile> {
     if (!loaded) {
       name.text = '${app.profile?['name'] ?? ''}';
       phone.text = '${app.profile?['phone'] ?? ''}';
+      emergency.text = '${app.profile?['emergency_phone'] ?? ''}';
       loaded = true;
     }
   }
@@ -1191,6 +1244,7 @@ class _CustomerProfileState extends State<CustomerProfile> {
   void dispose() {
     name.dispose();
     phone.dispose();
+    emergency.dispose();
     super.dispose();
   }
 
@@ -1209,12 +1263,17 @@ class _CustomerProfileState extends State<CustomerProfile> {
         TextField(
             controller: phone,
             keyboardType: TextInputType.phone,
+            decoration: InputDecoration(labelText: app.language=='hi'?'आपका फ़ोन':'Your phone')),
+        const SizedBox(height: 12),
+        TextField(
+            controller: emergency,
+            keyboardType: TextInputType.phone,
             decoration: InputDecoration(labelText: app.tr('emergency'))),
         const SizedBox(height: 14),
         HaanButton(app.tr('save'), onPressed: () async {
           try {
             await app.api
-                .patch('/v1/profile', {'name': name.text, 'phone': phone.text});
+                .patch('/v1/profile', {'name': name.text, 'phone': phone.text, 'emergency_phone':emergency.text});
             await app.refreshProfile();
             if (context.mounted) showMessage(context, app.tr('done'));
           } catch (e) {

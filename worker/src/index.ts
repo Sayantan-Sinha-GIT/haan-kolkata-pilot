@@ -220,6 +220,25 @@ api.get('/v1/trips/:id/route', async c => {
     : {lat:Number(trip.pickup_lat),lng:Number(trip.pickup_lng)};
   return c.json({...(await routeEstimate(c.env,origin,target,trip.vehicle_type as Vehicle)),target});
 });
+api.get('/v1/trips/:id/share', async c => {
+  const user=await requireRole(c.env,c.req.raw,['customer']);if(isResponse(user))return user;
+  const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
+  const [trip]=await db(c.env)`select customer_id,status from trips where id=${id}::uuid`;
+  if(!trip||trip.customer_id!==user.id||!['searching','accepted','arrived','in_progress'].includes(trip.status))return error('Trip cannot be shared.','not_shareable',404);
+  const expires=Math.floor(Date.now()/1000)+6*3600;
+  const sig=await hmac(c.env.SESSION_SECRET,`share:${id}:${expires}`);
+  return c.json({url:`${c.env.APP_ORIGIN}/trip.html?id=${id}&expires=${expires}&sig=${sig}`,expires});
+});
+api.get('/v1/shared/:id', async c => {
+  const id=c.req.param('id'),expires=Number(c.req.query('expires')),sig=c.req.query('sig')||'';
+  if(!uuidOk(id)||!Number.isSafeInteger(expires)||expires<Math.floor(Date.now()/1000)||expires>Math.floor(Date.now()/1000)+6*3600||!/^[a-f0-9]{64}$/.test(sig))return error('This link has expired.','expired_link',404);
+  if(!await consumeLimit(c.env,`shared:${ip(c.req.raw)}`,60,60))return error('Please try again shortly.','rate_limited',429);
+  if(await hmac(c.env.SESSION_SECRET,`share:${id}:${expires}`)!==sig)return error('This link is invalid.','invalid_link',404);
+  const [trip]=await db(c.env)`select status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng,created_at from trips where id=${id}::uuid`;
+  if(!trip)return error('Trip not found.','not_found',404);
+  const [location]=await db(c.env)`select lat,lng,recorded_at from trip_locations where trip_id=${id}::uuid order by recorded_at desc limit 1`;
+  return c.json({status:trip.status,vehicle:trip.vehicle_type,pickup:{lat:trip.pickup_lat,lng:trip.pickup_lng},drop:{lat:trip.drop_lat,lng:trip.drop_lng},rider_location:location||null,updated_at:location?.recorded_at||trip.created_at});
+});
 api.get('/v1/trips/:id/live', async c => {
   const user=await requireRole(c.env,c.req.raw,['customer','rider','super_admin','support_agent']);if(isResponse(user))return user;
   const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
@@ -314,20 +333,23 @@ api.post('/v1/trips/:id/location',async c=>{
 
 api.get('/v1/profile',async c=>{
   const user=await requireRole(c.env,c.req.raw,['customer','rider']);if(isResponse(user))return user;
-  const [profile]=await db(c.env)`select id,email,phone,name,language,theme,role from users where id=${user.id}::uuid`;
+  const [profile]=await db(c.env)`select id,email,phone,emergency_phone,name,language,theme,role from users where id=${user.id}::uuid`;
   return c.json({profile});
 });
 api.patch('/v1/profile',async c=>{
   const user=await requireRole(c.env,c.req.raw,['customer','rider']);if(isResponse(user))return user;
-  const input=await body<{name?:string;phone?:string;language?:string;theme?:string;push_token?:string}>(c.req.raw);
+  const input=await body<{name?:string;phone?:string;emergency_phone?:string;language?:string;theme?:string;push_token?:string}>(c.req.raw);
   const name=typeof input.name==='string'?input.name.trim().slice(0,80):null;
   const phone=typeof input.phone==='string'?input.phone.trim().slice(0,20):null;
+  const hasEmergency=typeof input.emergency_phone==='string';
+  const emergency=hasEmergency?input.emergency_phone!.trim():null;
+  if(emergency && !/^\+?[0-9 ()-]{7,20}$/.test(emergency))return error('Check the emergency contact number.','invalid_phone');
   const lang=['en','hi'].includes(input.language||'')?input.language:null;
   const theme=['dark','light','system'].includes(input.theme||'')?input.theme:null;
   const token=typeof input.push_token==='string'?input.push_token.slice(0,512):null;
-  const [profile]=await db(c.env)`update users set name=coalesce(${name},name),phone=coalesce(${phone},phone),
+  const [profile]=await db(c.env)`update users set name=coalesce(${name},name),phone=coalesce(${phone},phone),emergency_phone=case when ${hasEmergency} then ${emergency} else emergency_phone end,
     language=coalesce(${lang},language),theme=coalesce(${theme},theme),push_token=coalesce(${token},push_token)
-    where id=${user.id}::uuid returning id,email,phone,name,language,theme,role`;
+    where id=${user.id}::uuid returning id,email,phone,emergency_phone,name,language,theme,role`;
   return c.json({profile});
 });
 api.delete('/v1/profile',async c=>{
@@ -336,7 +358,7 @@ api.delete('/v1/profile',async c=>{
   const active=await sql`select id from trips where (customer_id=${user.id}::uuid or rider_id=${user.id}::uuid)
     and status in ('searching','accepted','arrived','in_progress') limit 1`;
   if(active.length)return error('Finish your active trip before deleting your account.','active_trip',409);
-  await sql`update users set email='deleted+'||id||'@haan.invalid',phone=null,name=null,push_token=null,deleted_at=now() where id=${user.id}::uuid`;
+  await sql`update users set email='deleted+'||id||'@haan.invalid',phone=null,emergency_phone=null,name=null,push_token=null,deleted_at=now() where id=${user.id}::uuid`;
   await sql`update sessions set revoked_at=now() where user_id=${user.id}::uuid and revoked_at is null`;
   await sql`update trips set customer_id=null where customer_id=${user.id}::uuid`;
   await sql`update trips set rider_id=null where rider_id=${user.id}::uuid`;

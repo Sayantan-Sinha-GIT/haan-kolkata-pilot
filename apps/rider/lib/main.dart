@@ -571,7 +571,7 @@ class Onboarding extends StatefulWidget {
 }
 
 class _OnboardingState extends State<Onboarding> {
-  final plate = TextEditingController(), upi = TextEditingController();
+  final name = TextEditingController(), plate = TextEditingController(), upi = TextEditingController();
   String vehicle = 'Bike';
   Map<String, dynamic>? profile;
   String? error;
@@ -579,6 +579,7 @@ class _OnboardingState extends State<Onboarding> {
   @override
   void initState() {
     super.initState();
+    name.text='${app.profile?['name'] ?? ''}';
     load();
   }
 
@@ -599,6 +600,7 @@ class _OnboardingState extends State<Onboarding> {
 
   @override
   void dispose() {
+    name.dispose();
     plate.dispose();
     upi.dispose();
     super.dispose();
@@ -607,6 +609,9 @@ class _OnboardingState extends State<Onboarding> {
   Future<void> save() async {
     setState(() => busy = true);
     try {
+      if(name.text.trim().length<2)throw const ApiException('Enter your name for rider review.','missing_name',400);
+      await app.api.patch('/v1/profile',{'name':name.text.trim()});
+      await app.refreshProfile();
       await app.api.patch('/v1/rider/profile', {
         'vehicle_type': vehicle,
         'vehicle_number': plate.text,
@@ -665,6 +670,12 @@ class _OnboardingState extends State<Onboarding> {
                     style:
                         TextStyle(color: Theme.of(context).colorScheme.error)),
               const SizedBox(height: 24),
+              TextField(
+                  controller: name,
+                  maxLength: 80,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(labelText: app.tr('yourName'))),
+              const SizedBox(height: 10),
               SegmentedButton<String>(segments: [
                 ButtonSegment(value: 'Bike', label: Text(app.tr('bike'))),
                 ButtonSegment(value: 'Auto', label: Text(app.tr('auto'))),

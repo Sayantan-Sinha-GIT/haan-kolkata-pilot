@@ -8,7 +8,7 @@ create type ticket_status as enum ('open','in_progress','resolved');
 
 create table users (
   id uuid primary key default gen_random_uuid(), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
-  role user_role not null, email text not null unique, phone text, name text,
+  role user_role not null, email text not null unique, phone text, emergency_phone text, name text,
   language text not null default 'en' check(language in ('en','hi')),
   theme text not null default 'system' check(theme in ('dark','light','system')),
   push_token text, is_blocked boolean not null default false, deleted_at timestamptz
@@ -73,6 +73,7 @@ create table trip_offers (
   unique(trip_id,rider_id)
 );
 create index live_offers on trip_offers(trip_id,expires_at) where responded_at is null;
+create unique index one_open_offer_per_trip on trip_offers(trip_id) where responded_at is null;
 create table trip_locations (
   id uuid primary key default gen_random_uuid(), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   trip_id uuid not null references trips(id), lat double precision not null, lng double precision not null,
