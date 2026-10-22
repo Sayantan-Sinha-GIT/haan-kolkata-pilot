@@ -30,6 +30,10 @@ jobs:
         app: [customer, rider]
     steps:
       - uses: actions/checkout@v4
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -38,7 +42,6 @@ jobs:
         with:
           flutter-version: '3.47.7'
           channel: stable
-          cache: true
       - name: Dependencies
         working-directory: apps/${{ matrix.app }}
         run: flutter pub get
