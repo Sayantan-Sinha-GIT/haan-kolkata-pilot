@@ -4,7 +4,7 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "APP_ORIGIN": "http://localhost:8788",
+    "APP_ORIGIN": "https://haan-kolkata-pilot.pages.dev",
     "OLA_DAILY_FREE_CAP": "0",
     "GEMINI_DAILY_FREE_CAP": "0",
     "GROQ_DAILY_FREE_CAP": "0",

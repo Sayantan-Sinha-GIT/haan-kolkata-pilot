@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
@@ -9,6 +10,7 @@ import 'package:haan_core/haan_core.dart';
 import 'background.dart';
 
 final app = HaanState(role: 'rider');
+final incomingOffer = ValueNotifier<bool>(false);
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await configureRiderService();
@@ -132,14 +134,16 @@ class RiderShell extends StatefulWidget {
 class _RiderShellState extends State<RiderShell> {
   int tab = 0;
   @override
-  Widget build(BuildContext context) => Scaffold(
-      body: IndexedStack(index: tab, children: const [
+  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+      valueListenable: incomingOffer,
+      builder: (context, offering, _) => Scaffold(
+      body: IndexedStack(index: offering ? 0 : tab, children: const [
         RiderHome(),
         RiderEarnings(),
         RiderHistory(),
         RiderAccount()
       ]),
-      bottomNavigationBar: NavigationBar(
+      bottomNavigationBar: offering ? null : NavigationBar(
           selectedIndex: tab,
           onDestinationSelected: (v) => setState(() => tab = v),
           destinations: [
@@ -152,7 +156,7 @@ class _RiderShellState extends State<RiderShell> {
                 icon: const Icon(Icons.receipt_long), label: app.tr('history')),
             NavigationDestination(
                 icon: const Icon(Icons.person), label: app.tr('profile'))
-          ]));
+          ])));
 }
 
 const kolkata = LatLng(22.5726, 88.3639);
@@ -165,11 +169,14 @@ class RiderHome extends StatefulWidget {
 
 class _RiderHomeState extends State<RiderHome> {
   Map<String, dynamic>? riderProfile, trip;
+  List<LatLng>? routePoints;
+  String? routeKey;
   List<dynamic> offers = [];
   LatLng center = kolkata;
   bool online = false, busy = false, lowData = false;
   String? error;
-  Timer? poll, heartbeat;
+  Timer? poll, heartbeat, countdown;
+  DateTime? offerExpiry;
   int remaining = 15;
   @override
   void initState() {
@@ -179,12 +186,19 @@ class _RiderHomeState extends State<RiderHome> {
         const Duration(seconds: 3), (_) => refresh(silent: true));
     heartbeat =
         Timer.periodic(const Duration(seconds: 15), (_) => sendLocation());
+    countdown = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (offerExpiry == null || !mounted) return;
+      final next = offerExpiry!.difference(DateTime.now()).inSeconds.clamp(0,15);
+      if (next != remaining) setState(() => remaining = next);
+    });
   }
 
   @override
   void dispose() {
     poll?.cancel();
     heartbeat?.cancel();
+    countdown?.cancel();
+    incomingOffer.value = false;
     super.dispose();
   }
 
@@ -198,20 +212,44 @@ class _RiderHomeState extends State<RiderHome> {
         final d = await app.api.get('/v1/trips/${active['trip']['id']}');
         t = Map<String, dynamic>.from(d['trip']);
       }
+      var freshRoute=routePoints;
+      if (t == null) { routeKey=null; freshRoute=null; }
+      else {
+        final nextKey='${t['id']}:${t['status']=='in_progress'?'drop':'pickup'}';
+        if (routeKey != nextKey) {
+          routeKey=nextKey;
+          final pos=await currentPosition();
+          if (pos!=null) {
+            center=LatLng(pos.latitude,pos.longitude);
+            final target=t['status']=='in_progress'
+              ? LatLng((t['drop_lat'] as num).toDouble(),(t['drop_lng'] as num).toDouble())
+              : LatLng((t['pickup_lat'] as num).toDouble(),(t['pickup_lng'] as num).toDouble());
+            freshRoute=[center,target];
+            try {
+              final nav=await app.api.get('/v1/trips/${t['id']}/route?lat=${pos.latitude}&lng=${pos.longitude}');
+              if (nav['polyline'] is String) freshRoute=decodePolyline(nav['polyline']);
+            } catch (_) { /* Keep the direct route line. */ }
+          }
+        }
+      }
       final od = await app.api.get('/v1/rider/offers');
       if (!mounted) return;
       final fresh = od['offers'] as List;
       if (fresh.isNotEmpty && offers.isEmpty) {
         Vibration.vibrate(duration: 350);
+        SystemSound.play(SystemSoundType.alert);
       }
       final wasOnline = online;
+      incomingOffer.value = fresh.isNotEmpty && t == null;
       setState(() {
         riderProfile = p == null ? null : Map<String, dynamic>.from(p);
         online = p?['is_online'] == true;
         trip = t;
+        routePoints = freshRoute;
         offers = fresh;
-        if (fresh.isNotEmpty)
-          remaining = DateTime.parse('${fresh.first['expires_at']}')
+        offerExpiry = fresh.isNotEmpty ? DateTime.parse('${fresh.first['expires_at']}') : null;
+        if (offerExpiry != null)
+          remaining = offerExpiry!
               .difference(DateTime.now())
               .inSeconds
               .clamp(0, 15);
@@ -322,6 +360,25 @@ class _RiderHomeState extends State<RiderHome> {
   @override
   Widget build(BuildContext context) {
     final verified = riderProfile?['verification_status'] == 'approved';
+    if (verified && trip == null && offers.isNotEmpty) {
+      return Container(
+          decoration: const BoxDecoration(gradient: LinearGradient(
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
+              colors: [Color(0xff10251f), Color(0xff07100d)])),
+          child: SafeArea(child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.two_wheeler, color: mint, size: 48),
+                const SizedBox(height: 30),
+                Text('NEW RIDE · KOLKATA', style: Theme.of(context).textTheme.labelLarge?.copyWith(color: mint)),
+                const Spacer(),
+                _offerPanel(),
+                const Spacer(),
+                LinearProgressIndicator(value: remaining / 15, color: mint),
+                const SizedBox(height: 10),
+                Text('Offer closes automatically in $remaining seconds.'),
+              ]))));
+    }
     return Stack(children: [
       Positioned.fill(
           child: HaanMap(
@@ -335,7 +392,8 @@ class _RiderHomeState extends State<RiderHome> {
                   ? null
                   : LatLng((trip!['drop_lat'] as num).toDouble(),
                       (trip!['drop_lng'] as num).toDouble()),
-              rider: trip == null ? null : center)),
+              rider: trip == null ? null : center,
+              routePoints: routePoints)),
       Positioned(
           top: MediaQuery.paddingOf(context).top + 12,
           left: 16,
@@ -439,7 +497,7 @@ class _RiderHomeState extends State<RiderHome> {
         const SizedBox(width: 12),
         Expanded(
             child: FilledButton(
-                onPressed: busy ? null : () => offerAction(true),
+                onPressed: busy || remaining == 0 ? null : () => offerAction(true),
                 child: Text(app.tr('accept'))))
       ])
     ]);
@@ -473,9 +531,9 @@ class _RiderHomeState extends State<RiderHome> {
             onPressed: busy ? null : () => tripAction('complete')),
       const SizedBox(height: 10),
       OutlinedButton.icon(
-          onPressed: () => navigate(status == 'accepted'),
+          onPressed: () => navigate(status != 'in_progress'),
           icon: const Icon(Icons.navigation),
-          label: Text(app.tr('navigate'))),
+          label: Text(app.language=='hi'?'मैप ऐप में खोलें':'Open in maps app')),
       if (status != 'in_progress')
         TextButton(
             onPressed: () async {

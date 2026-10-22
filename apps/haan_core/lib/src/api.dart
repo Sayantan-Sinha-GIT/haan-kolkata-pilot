@@ -70,8 +70,8 @@ class HaanApi {
       try {
         final renewed = await _send('POST','/v1/auth/refresh',body:{'refresh_token':_refresh,'device':'Android'},retried:true);
         await saveTokens(Map<String,dynamic>.from(renewed));
-        return _send(method,path,body:body,bytes:bytes,contentType:contentType,retried:true);
       } catch (_) { await _storage.deleteAll(); _access=null; _refresh=null; }
+      if (_access != null) return await _send(method,path,body:body,bytes:bytes,contentType:contentType,retried:true);
     }
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
     if (response.statusCode < 200 || response.statusCode >= 300) {

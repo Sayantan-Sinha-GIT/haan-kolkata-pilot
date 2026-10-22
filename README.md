@@ -16,7 +16,7 @@ The site and apps are **pilot software**. Real commercial operation needs local 
 
 ## Current infrastructure
 
-The `haan-kolkata-pilot` Neon project has a `production` branch with the schema and a `development` branch with inert test users. No live OTP, AI, maps, push, APK download, or public launch should be claimed until the related provider keys and links are configured and tested. `web/links.json` intentionally leaves both downloads unavailable until signed APKs exist on Drive.
+The [public site](https://haan-kolkata-pilot.pages.dev/) and [Worker API](https://haan-api.srimantasutapa123.workers.dev/health) are deployed. The `haan-kolkata-pilot` Neon project has a `production` branch with the schema and a `development` branch with inert test users. The owner super admin is provisioned; credentials remain in the ignored `secrets/admin-onboarding.txt` until enrolled in an authenticator. No live OTP, AI, push, APK download, or public pilot launch should be claimed until the related provider keys and links are configured and tested. `web/links.json` intentionally leaves both downloads unavailable until signed APKs exist on Drive. See [PROVIDER_SETUP.md](PROVIDER_SETUP.md) for the new key setup.
 
 ## Local checks
 
@@ -40,9 +40,9 @@ Build values are passed to Flutter using `--dart-define`: `API_BASE_URL`, `DOWNL
 
 1. Set up the Neon `production` and `development` branches and run `worker/schema.sql` once on production. Seed only development with `worker/seed.dev.sql`.
 2. Create a classic Workers KV namespace for private rider photos; place its ID in `worker/wrangler.jsonc`. Keep documents under 500 KB.
-3. Configure nonzero free-tier quotas and Worker secrets, then deploy the Worker and verify `/health` and the fare endpoint. The quotas stop provider calls at 80% of the configured daily allowance.
+3. Configure nonzero free-tier quotas and Worker secrets, then deploy the Worker and verify `/health` and the fare endpoint. The quotas stop provider calls at 80% of the configured daily allowance. Database, session, and admin TOTP secrets are already set in the deployed Worker.
 4. Set `APP_ORIGIN` to the exact Cloudflare Pages origin. Configure the same Worker URL in `web/config.json`.
-5. Create the super admin, enroll the authenticator, and verify the `/4632/admin/` console. The path is only obscurity; backend password, TOTP, role checks, 30-minute idle timeout and audit log enforce security.
+5. Enroll the already-created super admin in an authenticator and verify the `/4632/admin/` console. A live TOTP login and dashboard request have passed. The path is only obscurity; backend password, TOTP, role checks, 30-minute idle timeout and audit log enforce security.
 6. Build both apps with one fixed release signing key. Back the key up securely. Upload signed arm64 APKs to a personal Drive with public download links, then update `web/links.json` and recheck both QR codes.
 7. Deploy `web/` to Cloudflare Pages. Check a fresh Android 8+ device, two-phone trip, Hindi/English flows, weak/offline behavior and Lighthouse before inviting pilot users.
 

@@ -11,6 +11,7 @@ describe('non-negotiable trip rules',()=>{
   it('rejects invalid and too-close points before a booking',()=>{
     expect(validPoint({lat:22.57,lng:88.36,text:'Howrah'})).toBe(true);
     expect(validPoint({lat:221,lng:88.36,text:'Howrah'})).toBe(false);
+    expect(validPoint({lat:Number.NaN,lng:88.36,text:'Howrah'})).toBe(false);
     expect(haversineKm({lat:22.5726,lng:88.3639},{lat:22.573,lng:88.364})).toBeLessThan(.3);
   });
   it('scrubs phone and email before AI receives a phrase',()=>{

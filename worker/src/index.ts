@@ -135,7 +135,7 @@ api.post('/v1/fare/estimate', async c => {
   const route=await routeEstimate(c.env,input.pickup,input.drop,input.vehicle);
   const {km,minutes}=route;
   const [config] = await db(c.env)`select base,per_km,per_min,minimum from fare_config where vehicle_type=${input.vehicle}::vehicle_type`;
-  return c.json({ km, minutes, rupees: fare({ base:Number(config.base),per_km:Number(config.per_km),per_min:Number(config.per_min),minimum:Number(config.minimum) },km,minutes), route_source:route.source });
+  return c.json({ km, minutes, rupees: fare({ base:Number(config.base),per_km:Number(config.per_km),per_min:Number(config.per_min),minimum:Number(config.minimum) },km,minutes), route_source:route.source, polyline:route.polyline||null });
 });
 
 api.post('/v1/assistant/parse', async c => {
@@ -207,6 +207,18 @@ api.get('/v1/trips/:id', async c => {
   if(!trip || (user.role==='customer'&&trip.customer_id!==user.id) || (user.role==='rider'&&trip.rider_id!==user.id))return error('Trip not found.','not_found',404);
   const [location]=await db(c.env)`select lat,lng,heading,recorded_at from trip_locations where trip_id=${id}::uuid order by recorded_at desc limit 1`;
   return c.json({ trip, location:location||null });
+});
+api.get('/v1/trips/:id/route', async c => {
+  const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
+  const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
+  const [trip]=await db(c.env)`select rider_id,status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng from trips where id=${id}::uuid`;
+  if(!trip||trip.rider_id!==user.id||!['accepted','arrived','in_progress'].includes(trip.status))return error('Trip not found.','not_found',404);
+  const origin={lat:Number(c.req.query('lat')),lng:Number(c.req.query('lng'))};
+  if(!validPoint({...origin,text:'Current location'}))return error('Location is unavailable.','invalid_location');
+  const target=trip.status==='in_progress'
+    ? {lat:Number(trip.drop_lat),lng:Number(trip.drop_lng)}
+    : {lat:Number(trip.pickup_lat),lng:Number(trip.pickup_lng)};
+  return c.json({...(await routeEstimate(c.env,origin,target,trip.vehicle_type as Vehicle)),target});
 });
 api.get('/v1/trips/:id/live', async c => {
   const user=await requireRole(c.env,c.req.raw,['customer','rider','super_admin','support_agent']);if(isResponse(user))return user;

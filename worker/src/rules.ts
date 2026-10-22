@@ -19,7 +19,7 @@ export function haversineKm(a: { lat: number; lng: number }, b: { lat: number; l
 export function validPoint(v: unknown): v is { lat: number; lng: number; text: string } {
   if (!v || typeof v !== 'object') return false;
   const p = v as Record<string, unknown>;
-  return typeof p.lat === 'number' && p.lat >= -90 && p.lat <= 90 && typeof p.lng === 'number' && p.lng >= -180 && p.lng <= 180 && typeof p.text === 'string' && p.text.trim().length > 1 && p.text.length <= 240;
+  return typeof p.lat === 'number' && Number.isFinite(p.lat) && p.lat >= -90 && p.lat <= 90 && typeof p.lng === 'number' && Number.isFinite(p.lng) && p.lng >= -180 && p.lng <= 180 && typeof p.text === 'string' && p.text.trim().length > 1 && p.text.length <= 240;
 }
 export function scrubAssistantText(text: string): string {
   return text.replace(/\b[6-9]\d{9}\b/g, '[phone]').replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, '[email]').slice(0, 600);

@@ -195,6 +195,7 @@ class _RideHomeState extends State<RideHome> {
   String pickupLabel = 'Kolkata', dropLabel = '';
   String vehicle = 'Bike';
   Map<String, dynamic>? estimate, trip;
+  List<LatLng>? routePoints;
   String? pin;
   bool busy = false, viaAssistant = false;
   String? error;
@@ -287,6 +288,7 @@ class _RideHomeState extends State<RideHome> {
           dropLabel = '${selected['name']}';
         }
         estimate = null;
+        routePoints = null;
       });
       if (drop != null) _estimate();
     }
@@ -304,7 +306,11 @@ class _RideHomeState extends State<RideHome> {
         'drop': point(drop!, dropLabel),
         'vehicle': vehicle
       });
-      if (mounted) setState(() => estimate = Map<String, dynamic>.from(d));
+      if (mounted) setState(() {
+        estimate = Map<String, dynamic>.from(d);
+        try { routePoints = d['polyline'] is String ? decodePolyline(d['polyline']) : null; }
+        on FormatException { routePoints = null; }
+      });
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -374,6 +380,7 @@ class _RideHomeState extends State<RideHome> {
               pickup: pickup,
               drop: drop,
               rider: rider,
+              routePoints: routePoints,
               onTap: trip == null
                   ? (p) => setState(() {
                         drop = p;
