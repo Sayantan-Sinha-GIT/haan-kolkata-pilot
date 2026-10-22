@@ -16,7 +16,7 @@ The site and apps are **pilot software**. Real commercial operation needs local 
 
 ## Current infrastructure
 
-The [public site](https://haan-kolkata-pilot.pages.dev/) and [Worker API](https://haan-api.srimantasutapa123.workers.dev/health) are deployed. The `haan-kolkata-pilot` Neon project has a `production` branch with the schema and a `development` branch with inert test users. The owner super admin is provisioned; credentials remain in the ignored `secrets/admin-onboarding.txt` until enrolled in an authenticator. The first signed Android build exposed a third-party `shared_preferences_android` release crash in emulator testing. Downloads are disabled while version 1.0.1 is rebuilt and verified. No live OTP, AI, push, or public pilot launch should be claimed until the related provider keys are configured and tested. See [PROVIDER_SETUP.md](PROVIDER_SETUP.md) for the new key setup.
+The [public site](https://haan-kolkata-pilot.pages.dev/) and [Worker API](https://haan-api.srimantasutapa123.workers.dev/health) are deployed. The `haan-kolkata-pilot` Neon project has a `production` branch with the schema and a `development` branch with inert test users. The owner super admin is provisioned; credentials remain in the ignored `secrets/admin-onboarding.txt` until enrolled in an authenticator. Signed version 1.0.2 APKs for both apps passed emulator installation, first launch, language and theme persistence checks. An earlier release exposed a third-party `shared_preferences_android` crash; the dependency is pinned to a working version. No live OTP, AI, push, or public pilot launch should be claimed until the related provider keys are configured and tested. See [PROVIDER_SETUP.md](PROVIDER_SETUP.md) for key setup.
 
 ## Local checks
 
@@ -28,7 +28,7 @@ cd apps/customer && flutter pub get && flutter analyze --no-fatal-infos
 cd ../rider && flutter pub get && flutter analyze --no-fatal-infos
 ```
 
-The website is static: serve `web/` with any local HTTP server. Set `web/config.json` to the deployed Worker URL for the admin console. `web/links.json` remains blank until the rebuilt APKs pass emulator smoke testing. It then points to versioned APK assets in `web/downloads/` (ignored by Git); the page generates its QR codes from those exact URLs. Replace the links with personal Drive URLs after uploading the APKs and the release signing key backup there.
+The website is static: serve `web/` with any local HTTP server. Set `web/config.json` to the deployed Worker URL for the admin console. `web/links.json` points to versioned APK assets in `web/downloads/` (ignored by Git); the page generates its QR codes from those exact URLs. Replace the links with personal Drive URLs after uploading the APKs and the release signing key backup there.
 
 ## Secrets and build values
 
