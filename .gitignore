@@ -15,6 +15,7 @@ android/local.properties
 android/key.properties
 *.jks
 *.keystore
+web/downloads/
 .idea/
 *.iml
 
