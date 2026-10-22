@@ -35,7 +35,7 @@ let lw=innerWidth,lh=innerHeight;addEventListener('resize',()=>{if(innerWidth!==
 function splitNode(n,cls,mode){[...n.childNodes].forEach(c=>{if(c.nodeType===3){const f=document.createDocumentFragment();c.textContent.split(/(\s+)/).forEach(p=>{if(!p)return;if(/^\s+$/.test(p))return f.append(' ');const w=document.createElement('span');w.className=cls;
 if(mode===1)[...p].forEach(x=>{const s=document.createElement('span');s.className='ch';s.textContent=x;w.append(s)});else if(mode===2){const s=document.createElement('span');s.className='ch';s.textContent=p;w.append(s)}else w.textContent=p;f.append(w)});c.replaceWith(f)}else if(c.nodeType===1&&c.tagName!=='BR')splitNode(c,cls,mode)})}
 function initSp(e){e._t&&(e._t.scrollTrigger&&e._t.scrollTrigger.kill(),e._t.kill());if(RM)return;const t=e.innerHTML.replace(/<br>/g,' ').replace(/<[^>]+>/g,'');splitNode(e,'w',L==='hi'?2:1);$$('.w',e).forEach(w=>w.setAttribute('aria-hidden','true'));const v=document.createElement('span');v.className='vh';v.textContent=t;e.prepend(v);
-e._t=gsap.fromTo($$('.ch',e),{yPercent:115},{yPercent:0,duration:1,ease:'expo.out',stagger:L==='hi'?.06:.02,delay:+(e.dataset.d||0),scrollTrigger:{trigger:e,start:'top 92%',once:true}})}
+const hero=!!e.closest('.hero');e._t=gsap.fromTo($$('.ch',e),{yPercent:hero?20:115},{yPercent:0,duration:hero?.55:1,ease:'expo.out',stagger:hero?.008:L==='hi'?.06:.02,delay:hero?0:+(e.dataset.d||0),scrollTrigger:{trigger:e,start:'top 92%',once:true}})}
 function initWr(e){e._t&&(e._t.scrollTrigger&&e._t.scrollTrigger.kill(),e._t.kill());if(RM)return;splitNode(e,'wd',0);e._t=gsap.fromTo($$('.wd',e),{opacity:.16},{opacity:1,stagger:.1,ease:'none',scrollTrigger:{trigger:e,start:'top 80%',end:'bottom 45%',scrub:true}})}
 function applyLang(l,s){L=l;root.lang=l;$('#lg').textContent=l==='hi'?'EN':'हि';$$('[data-hi]').forEach(e=>{if(e.dataset.en===undefined)e.dataset.en=e.innerHTML;e.innerHTML=l==='hi'?e.dataset.hi:e.dataset.en});$$('.sp').forEach(initSp);$$('.wr').forEach(initWr);window.fbn&&fbn();wpTxt();if(s){sv('haan-lang',l);ScrollTrigger.refresh()}}
 function setTheme(t,s){root.dataset.theme=t;$('#th').setAttribute('aria-pressed',t==='light');$('meta[name=theme-color]').content=t==='light'?'#f5efe0':'#0a0907';s&&sv('haan-theme',t);bgColors();RM&&bgFrame()}
@@ -52,7 +52,7 @@ if(!RM){gsap.to('.pg',{scaleX:1,ease:'none',scrollTrigger:{start:0,end:'max',scr
 gsap.fromTo('.rt.a',{strokeDashoffset:1.01},{strokeDashoffset:0,duration:2.6,ease:'power2.inOut',stagger:.3});
 gsap.to('.rt.b',{strokeDashoffset:0,ease:'none',scrollTrigger:{trigger:'.hero',start:'top top',end:'bottom 25%',scrub:true}});
 gsap.from('#ph',{y:90,autoAlpha:0,rotateY:-20,transformPerspective:900,duration:1.5,ease:'expo.out',delay:.3});
-gsap.from('.hero .ht>:not(h1),.hero .try',{y:30,autoAlpha:0,duration:1,stagger:.1,delay:.6,ease:'power3.out'});
+gsap.from('.hero .ht>:not(h1),.hero .try',{y:15,duration:.55,stagger:.08,ease:'power3.out'});
 gsap.to('.hp',{y:-70,ease:'none',scrollTrigger:{trigger:'.hero',start:'top top',end:'bottom top',scrub:true}});
 $$('.rv').forEach(e=>gsap.from(e,{y:40,autoAlpha:0,duration:1,ease:'power3.out',scrollTrigger:{trigger:e,start:'top 90%',once:true}}));
 gsap.from('.nums>div',{y:50,autoAlpha:0,duration:.9,stagger:.12,ease:'power3.out',scrollTrigger:{trigger:'.nums',start:'top 88%',once:true}});
