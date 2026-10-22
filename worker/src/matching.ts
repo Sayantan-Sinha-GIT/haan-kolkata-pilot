@@ -1,0 +1,43 @@
+import { db } from './db';
+import { broadcast } from './services';
+import type { Env } from './types';
+
+export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
+  const sql = db(env);
+  const [trip] = await sql`select id,status,vehicle_type,pickup_lat,pickup_lng,created_at,search_deadline,offer_count
+    from trips where id=${tripId}::uuid`;
+  if (!trip || trip.status !== 'searching') return false;
+  const expired = await sql`update trip_offers set response='timeout',responded_at=now()
+    where trip_id=${tripId}::uuid and responded_at is null and expires_at<=now() returning rider_id`;
+  for (const offer of expired) {
+    await sql`update rider_profiles set decline_streak=decline_streak+1,
+      is_online=case when decline_streak+1>=3 then false else is_online end where user_id=${offer.rider_id}::uuid`;
+  }
+  const pending = await sql`select id from trip_offers where trip_id=${tripId}::uuid and responded_at is null and expires_at>now() limit 1`;
+  if (pending.length) return true;
+  if (new Date(trip.search_deadline).getTime() <= Date.now() || Number(trip.offer_count) >= 5) {
+    await sql`update trips set status='no_riders_found' where id=${tripId}::uuid and status='searching'`;
+    await broadcast(env, tripId, { status: 'no_riders_found' });
+    return false;
+  }
+  const elapsed = Date.now() - new Date(trip.created_at).getTime();
+  const radius = elapsed >= 20_000 ? 5 : 2;
+  const candidates = await sql`select rp.user_id,
+    6371*2*asin(sqrt(least(1,power(sin(radians(rp.last_lat-${Number(trip.pickup_lat)})/2),2)
+    +cos(radians(${Number(trip.pickup_lat)}))*cos(radians(rp.last_lat))
+    *power(sin(radians(rp.last_lng-${Number(trip.pickup_lng)})/2),2)))) as km
+    from rider_profiles rp join users u on u.id=rp.user_id
+    where rp.is_online and rp.verification_status='approved' and rp.vehicle_type=${trip.vehicle_type}::vehicle_type
+      and rp.last_seen_at>now()-interval '90 seconds' and not u.is_blocked
+      and not exists(select 1 from trip_offers o where o.trip_id=${tripId}::uuid and o.rider_id=rp.user_id)
+      and not exists(select 1 from trips t where t.rider_id=rp.user_id and t.status in ('accepted','arrived','in_progress'))
+    order by km limit 8`;
+  const candidate = candidates.find(r => Number(r.km) <= radius);
+  if (!candidate) return true;
+  const offers = await sql`insert into trip_offers(trip_id,rider_id) values(${tripId}::uuid,${candidate.user_id}::uuid)
+    on conflict do nothing returning id`;
+  if (!offers.length) return true;
+  await sql`update trips set offer_count=offer_count+1 where id=${tripId}::uuid and status='searching'`;
+  await broadcast(env, tripId, { status: 'searching', rider_offer: candidate.user_id });
+  return true;
+}

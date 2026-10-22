@@ -1,0 +1,20 @@
+{
+  "name": "haan-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_ORIGIN": "http://localhost:8788",
+    "OLA_DAILY_FREE_CAP": "0",
+    "GEMINI_DAILY_FREE_CAP": "0",
+    "GROQ_DAILY_FREE_CAP": "0",
+    "BREVO_DAILY_FREE_CAP": "0"
+  },
+  "kv_namespaces": [{ "binding": "DOCUMENTS", "id": "959b677a88e644a89818c827767f772a" }],
+  "durable_objects": {
+    "bindings": [{ "name": "TRIP_ROOM", "class_name": "TripRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TripRoom"] }],
+  "triggers": { "crons": ["* * * * *", "15 3 * * *"] }
+}
+

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Haan map-pin mark">
+  <rect width="512" height="512" rx="112" fill="#0a0907"/>
+  <path d="M256 70c-103 0-184 79-184 182 0 130 184 218 184 218s184-88 184-218C440 149 359 70 256 70Z" fill="#ffc21a"/>
+  <circle cx="256" cy="245" r="99" fill="#0a0907"/>
+  <path d="M198 188v114m116-114v114m-116-57h116" fill="none" stroke="#ffc21a" stroke-width="30" stroke-linecap="round"/>
+</svg>
