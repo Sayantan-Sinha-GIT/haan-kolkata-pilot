@@ -16,10 +16,14 @@ export function haversineKm(a: { lat: number; lng: number }, b: { lat: number; l
   const v = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
   return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(v)));
 }
+export function validCoordinates(lat: unknown, lng: unknown): lat is number {
+  return typeof lat === 'number' && Number.isFinite(lat) && lat >= -90 && lat <= 90
+    && typeof lng === 'number' && Number.isFinite(lng) && lng >= -180 && lng <= 180;
+}
 export function validPoint(v: unknown): v is { lat: number; lng: number; text: string } {
   if (!v || typeof v !== 'object') return false;
   const p = v as Record<string, unknown>;
-  return typeof p.lat === 'number' && Number.isFinite(p.lat) && p.lat >= -90 && p.lat <= 90 && typeof p.lng === 'number' && Number.isFinite(p.lng) && p.lng >= -180 && p.lng <= 180 && typeof p.text === 'string' && p.text.trim().length > 1 && p.text.length <= 240;
+  return validCoordinates(p.lat,p.lng) && typeof p.text === 'string' && p.text.trim().length > 1 && p.text.length <= 240;
 }
 export function scrubAssistantText(text: string): string {
   return text.replace(/\b[6-9]\d{9}\b/g, '[phone]').replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, '[email]').slice(0, 600);

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { db, consumeLimit } from './db';
 import { hmac, randomDigits, randomToken, signAccess, verifyAccess, verifyPassword, decryptTotp, verifyTotp, passwordHash, newTotpSecret, encryptTotp, totpSetupKey } from './crypto';
-import { fare, haversineKm, validPoint, scrubAssistantText, type Vehicle } from './rules';
+import { fare, haversineKm, validCoordinates, validPoint, scrubAssistantText, type Vehicle } from './rules';
 import { advanceMatch } from './matching';
 import { assistantIntent, broadcast, routeEstimate, searchPlaces, sendEmail, transcribe, TripRoom } from './services';
 import { sendPush } from './push';
@@ -322,7 +322,8 @@ api.post('/v1/trips/:id/complete',async c=>{
 api.post('/v1/trips/:id/location',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
   const id=c.req.param('id'),input=await body<{lat?:number;lng?:number;heading?:number}>(c.req.raw);
-  if(!uuidOk(id)||!Number.isFinite(input.lat)||!Number.isFinite(input.lng)||Math.abs(input.lat!)>90||Math.abs(input.lng!)>180)return error('Location unavailable.','invalid_location');
+  if(!uuidOk(id)||!validCoordinates(input.lat,input.lng)||
+    (input.heading!==undefined&&(!Number.isFinite(input.heading)||input.heading<0||input.heading>=360)))return error('Location unavailable.','invalid_location');
   const sql=db(c.env);
   const [trip]=await sql`select status from trips where id=${id}::uuid and rider_id=${user.id}::uuid and status in ('accepted','arrived','in_progress')`;
   if(!trip)return error('Trip not active.','invalid_state',409);
@@ -471,10 +472,10 @@ api.post('/v1/rider/online',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
   const input=await body<{online?:boolean;lat?:number;lng?:number}>(c.req.raw);
   if(typeof input.online!=='boolean')return error('Choose online or offline.','invalid_state');
-  if(input.online&&(!Number.isFinite(input.lat)||!Number.isFinite(input.lng)))return error('Turn on GPS before going online.','gps_required');
+  if(input.online&&!validCoordinates(input.lat,input.lng))return error('Turn on GPS before going online.','gps_required');
   const sql=db(c.env);
-  const rows=await sql`update rider_profiles set is_online=${input.online},last_lat=case when ${input.online} then ${input.lat||null} else last_lat end,
-    last_lng=case when ${input.online} then ${input.lng||null} else last_lng end,last_seen_at=case when ${input.online} then now() else last_seen_at end
+  const rows=await sql`update rider_profiles set is_online=${input.online},last_lat=case when ${input.online} then ${input.lat??null} else last_lat end,
+    last_lng=case when ${input.online} then ${input.lng??null} else last_lng end,last_seen_at=case when ${input.online} then now() else last_seen_at end
     where user_id=${user.id}::uuid and verification_status='approved' returning is_online`;
   if(!rows.length)return error('Wait for rider approval before going online.','not_approved',403);
   return c.json({online:rows[0].is_online});
@@ -482,7 +483,7 @@ api.post('/v1/rider/online',async c=>{
 api.post('/v1/rider/heartbeat',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
   const input=await body<{lat?:number;lng?:number}>(c.req.raw);
-  if(!Number.isFinite(input.lat)||!Number.isFinite(input.lng))return error('Location unavailable.','invalid_location');
+  if(!validCoordinates(input.lat,input.lng))return error('Location unavailable.','invalid_location');
   await db(c.env)`update rider_profiles set last_lat=${input.lat!},last_lng=${input.lng!},last_seen_at=now() where user_id=${user.id}::uuid and is_online`;
   return c.json({ok:true});
 });

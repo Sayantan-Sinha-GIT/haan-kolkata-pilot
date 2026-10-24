@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fare, haversineKm, scrubAssistantText, validPoint } from './rules';
+import { fare, haversineKm, scrubAssistantText, validCoordinates, validPoint } from './rules';
 import { decryptTotp, encryptTotp, hmac, totp, totpSetupKey } from './crypto';
 
 describe('non-negotiable trip rules',()=>{
@@ -13,6 +13,13 @@ describe('non-negotiable trip rules',()=>{
     expect(validPoint({lat:221,lng:88.36,text:'Howrah'})).toBe(false);
     expect(validPoint({lat:Number.NaN,lng:88.36,text:'Howrah'})).toBe(false);
     expect(haversineKm({lat:22.5726,lng:88.3639},{lat:22.573,lng:88.364})).toBeLessThan(.3);
+  });
+  it('rejects out-of-range rider coordinates and keeps zero valid',()=>{
+    expect(validCoordinates(22.5726,88.3639)).toBe(true);
+    expect(validCoordinates(0,0)).toBe(true);
+    expect(validCoordinates(100,88.36)).toBe(false);
+    expect(validCoordinates(22.57,181)).toBe(false);
+    expect(validCoordinates('22.57',88.36)).toBe(false);
   });
   it('scrubs phone and email before AI receives a phrase',()=>{
     expect(scrubAssistantText('Call 9876543210 or x@y.com for Sealdah')).toBe('Call [phone] or [email] for Sealdah');

@@ -5,10 +5,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "APP_ORIGIN": "https://haan-kolkata-pilot.pages.dev",
-    "OLA_DAILY_FREE_CAP": "0",
-    "GEMINI_DAILY_FREE_CAP": "0",
-    "GROQ_DAILY_FREE_CAP": "0",
-    "BREVO_DAILY_FREE_CAP": "0"
+    "OLA_DAILY_FREE_CAP": "1000",
+    "GEMINI_DAILY_FREE_CAP": "50",
+    "GROQ_DAILY_FREE_CAP": "100",
+    "BREVO_DAILY_FREE_CAP": "300"
   },
   "kv_namespaces": [{ "binding": "DOCUMENTS", "id": "959b677a88e644a89818c827767f772a" }],
   "durable_objects": {

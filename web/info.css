@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600..900&family=Hind:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('fonts.css');
 :root{--bg:#0a0907;--bg2:#14110c;--fg:#f4efe4;--mut:#b3ab9a;--line:#514a3d;--acc:#ffc21a;color-scheme:dark}
 [data-theme=light]{--bg:#f5efe0;--bg2:#eae1cb;--fg:#17140d;--mut:#514a3d;--line:#a19884;--acc:#855400;color-scheme:light}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--fg);font:400 17px/1.65 Hind,sans-serif;min-height:100dvh}

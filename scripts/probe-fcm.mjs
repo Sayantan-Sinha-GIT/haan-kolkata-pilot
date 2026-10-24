@@ -1,0 +1,14 @@
+import { createPrivateKey, sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+const service=JSON.parse(readFileSync(new URL('../secrets/firebase-service-account.json',import.meta.url),'utf8'));
+const now=Math.floor(Date.now()/1000),encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+const claim=`${encode({alg:'RS256',typ:'JWT'})}.${encode({iss:service.client_email,scope:'https://www.googleapis.com/auth/firebase.messaging',aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600})}`;
+const assertion=`${claim}.${sign('RSA-SHA256',Buffer.from(claim),createPrivateKey(service.private_key)).toString('base64url')}`;
+const tokenResponse=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion}),signal:AbortSignal.timeout(15000)});
+if(!tokenResponse.ok)throw new Error(`Firebase OAuth HTTP ${tokenResponse.status}`);
+const {access_token}=await tokenResponse.json();
+const response=await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(service.project_id)}/messages:send`,{method:'POST',headers:{Authorization:`Bearer ${access_token}`,'Content-Type':'application/json'},body:JSON.stringify({message:{token:'invalid-qa-device-token',notification:{title:'Haan QA',body:'No device should receive this'}}}),signal:AbortSignal.timeout(15000)});
+const data=await response.json();
+const enabled=response.status===400&&data.error?.status==='INVALID_ARGUMENT';
+console.log(JSON.stringify({provider:'fcm-v1',http:response.status,enabled,errorCode:data.error?.status||null}));
+if(!enabled)process.exitCode=1;
