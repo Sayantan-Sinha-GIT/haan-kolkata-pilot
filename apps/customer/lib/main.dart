@@ -236,6 +236,7 @@ class _RideHomeState extends State<RideHome> {
   String? receiptOpenedFor;
   String? photoRequestedFor;
   Uint8List? driverPhoto;
+  DateTime? photoRetryAfter;
   final secure = const FlutterSecureStorage();
   @override
   void initState() {
@@ -278,6 +279,7 @@ class _RideHomeState extends State<RideHome> {
                 builder: (_) => ReceiptPage(id: previousId)));
           }
         }
+        if (previousId != null) await secure.delete(key: 'pin:$previousId');
         if (trip != null && mounted)
           setState(() {
             trip = null;
@@ -285,6 +287,7 @@ class _RideHomeState extends State<RideHome> {
             pin = null;
             driverPhoto = null;
             photoRequestedFor = null;
+            photoRetryAfter = null;
           });
         return;
       }
@@ -307,9 +310,12 @@ class _RideHomeState extends State<RideHome> {
               : LatLng((loc['lat'] as num).toDouble(),
                   (loc['lng'] as num).toDouble());
         });
-      if (t['rider_id'] != null && photoRequestedFor != id &&
+      if (t['rider_id'] != null &&
+          (photoRequestedFor != id || (driverPhoto == null &&
+            DateTime.now().isAfter(photoRetryAfter ?? DateTime.fromMillisecondsSinceEpoch(0)))) &&
           ['accepted', 'arrived', 'in_progress'].contains(t['status'])) {
         photoRequestedFor = id;
+        photoRetryAfter = DateTime.now().add(const Duration(seconds: 30));
         try {
           final bytes = await app.api.getBytes('/v1/trips/$id/driver-photo');
           if (mounted) setState(() => driverPhoto = Uint8List.fromList(bytes));

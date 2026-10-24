@@ -204,7 +204,8 @@ api.get('/v1/trips/:id', async c => {
   const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
   const [trip]=await db(c.env)`select t.id,t.customer_id,t.rider_id,t.status,t.vehicle_type,t.pickup_lat,t.pickup_lng,t.pickup_text,t.pickup_note,t.drop_lat,t.drop_lng,t.drop_text,
     t.estimated_km,t.estimated_min,t.estimate_rupees,t.final_rupees,t.created_at,t.accepted_at,t.arrived_at,t.started_at,t.completed_at,
-    ru.name as rider_name,ru.phone as rider_phone,cu.name as customer_name,cu.phone as customer_phone,
+    ru.name as rider_name,case when t.status in ('accepted','arrived','in_progress') then ru.phone end as rider_phone,
+    cu.name as customer_name,case when t.status in ('accepted','arrived','in_progress') then cu.phone end as customer_phone,
     rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,rp.rating_avg
     from trips t left join users ru on ru.id=t.rider_id left join users cu on cu.id=t.customer_id
     left join rider_profiles rp on rp.user_id=t.rider_id where t.id=${id}::uuid`;
@@ -502,6 +503,7 @@ api.patch('/v1/rider/profile',async c=>{
 api.post('/v1/rider/documents/:kind',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
   const kind=c.req.param('kind');if(!['licence','rc','selfie','insurance','permit'].includes(kind))return error('Unknown document.','invalid_document');
+  if(!await consumeLimit(c.env,`rider-doc:${user.id}`,20,60))return error('Too many uploads. Try again in an hour.','upload_limit',429);
   const contentType=c.req.header('Content-Type')||'';
   if(!['image/jpeg','image/png','image/webp'].includes(contentType))return error('Upload a JPEG, PNG or WebP image.','invalid_file_type');
   const bytes=await c.req.arrayBuffer();

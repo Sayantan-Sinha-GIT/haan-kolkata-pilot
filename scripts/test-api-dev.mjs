@@ -71,6 +71,7 @@ try {
   const badSig = new URLSearchParams(sharedUrl.search); badSig.set('sig','0'.repeat(64));
   await expectStatus('invalid share signature denied', await call(`/v1/shared/${id}?${badSig}`),404);
   await expectStatus('trip completed', await call(`/v1/trips/${id}/complete`,'POST',{final_km:1000},riderToken),200,data=>Number(data.trip.final_rupees)<=Number(created.trip.estimate_rupees)*1.5+0.5);
+  await expectStatus('phone number hidden after trip',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,d=>d.trip.rider_phone===null);
   const oldPhoto=await photo(customerToken);if(oldPhoto.status!==404)throw Error('Completed trip photo should no longer be shared');checks++;console.log('PASS photo access ends with trip');
   await expectStatus('double completion denied', await call(`/v1/trips/${id}/complete`,'POST',{},riderToken),409);
   await expectStatus('customer rating', await call(`/v1/trips/${id}/rating`,'POST',{stars:5,comment:'QA'},customerToken),200);

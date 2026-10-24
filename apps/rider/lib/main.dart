@@ -455,6 +455,11 @@ class _RiderHomeState extends State<RiderHome> {
                 ? 'Add your vehicle and documents.'
                 : app.tr('${riderProfile!['verification_status']}'),
             style: Theme.of(context).textTheme.titleLarge),
+        if (riderProfile?['verification_status'] == 'approved' &&
+            riderProfile?['registration_complete'] != true)
+          Text(app.language == 'hi'
+              ? 'गाड़ी या दस्तावेज़ की जानकारी अधूरी या समाप्त है। अपडेट करके फिर जमा करें।'
+              : 'Vehicle or document details are incomplete or expired. Update them for review.'),
         if (riderProfile?['rejection_reason'] != null)
           Text('${riderProfile!['rejection_reason']}',
               style: TextStyle(color: Theme.of(context).colorScheme.error)),
@@ -495,7 +500,7 @@ class _RiderHomeState extends State<RiderHome> {
       Text('${o['pickup_text']} → ${o['drop_text']}',
           style: Theme.of(context).textTheme.titleLarge),
       if (o['pickup_distance_km'] != null)
-        Text('${app.language == 'hi' ? 'पिकअप' : 'Pickup'}: ${o['pickup_distance_km']} km ${app.language == 'hi' ? 'दूर' : 'away'}'),
+        Text('${app.language == 'hi' ? 'पिकअप' : 'Pickup'}: ~${o['pickup_distance_km']} km ${app.language == 'hi' ? 'दूर' : 'away'}'),
       const SizedBox(height: 10),
       Text('${o['estimated_km']} km  ·  ₹${o['estimate_rupees']}',
           style: Theme.of(context).textTheme.headlineMedium),
