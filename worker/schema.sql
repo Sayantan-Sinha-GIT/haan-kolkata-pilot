@@ -16,7 +16,9 @@ create table users (
 create table rider_profiles (
   id uuid primary key default gen_random_uuid(), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   user_id uuid not null unique references users(id), vehicle_type vehicle_type, vehicle_number text,
-  licence_key text, rc_key text, selfie_key text, upi_id text,
+  vehicle_make text, vehicle_model text, vehicle_color text, vehicle_year smallint,
+  licence_number text, insurance_expiry date, permit_expiry date,
+  licence_key text, rc_key text, selfie_key text, insurance_key text, permit_key text, upi_id text,
   verification_status verification_status not null default 'pending', rejection_reason text,
   is_online boolean not null default false, last_lat double precision, last_lng double precision, last_seen_at timestamptz,
   decline_streak smallint not null default 0, rating_avg numeric(3,2) not null default 0
@@ -52,7 +54,7 @@ create table trips (
   id uuid primary key default gen_random_uuid(), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   customer_id uuid references users(id), rider_id uuid references users(id), status trip_status not null default 'searching',
   vehicle_type vehicle_type not null, pickup_lat double precision not null, pickup_lng double precision not null,
-  pickup_text text not null, drop_lat double precision not null, drop_lng double precision not null, drop_text text not null,
+  pickup_text text not null, pickup_note text, drop_lat double precision not null, drop_lng double precision not null, drop_text text not null,
   estimated_km numeric(9,2) not null, estimated_min numeric(9,2) not null, estimate_rupees integer not null,
   final_km numeric(9,2), duration_min numeric(9,2), final_rupees integer,
   pin_hash text not null, wrong_pin_attempts smallint not null default 0, pin_locked boolean not null default false,

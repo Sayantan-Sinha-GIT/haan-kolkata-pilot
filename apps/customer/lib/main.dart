@@ -225,6 +225,7 @@ class _RideHomeState extends State<RideHome> {
   LatLng center = kolkata, pickup = kolkata;
   LatLng? drop, rider;
   String pickupLabel = 'Kolkata', dropLabel = '';
+  final pickupNote = TextEditingController();
   String vehicle = 'Bike';
   Map<String, dynamic>? estimate, trip;
   List<LatLng>? routePoints;
@@ -233,6 +234,8 @@ class _RideHomeState extends State<RideHome> {
   String? error;
   Timer? timer;
   String? receiptOpenedFor;
+  String? photoRequestedFor;
+  Uint8List? driverPhoto;
   final secure = const FlutterSecureStorage();
   @override
   void initState() {
@@ -246,6 +249,7 @@ class _RideHomeState extends State<RideHome> {
   @override
   void dispose() {
     timer?.cancel();
+    pickupNote.dispose();
     super.dispose();
   }
 
@@ -279,6 +283,8 @@ class _RideHomeState extends State<RideHome> {
             trip = null;
             rider = null;
             pin = null;
+            driverPhoto = null;
+            photoRequestedFor = null;
           });
         return;
       }
@@ -289,13 +295,26 @@ class _RideHomeState extends State<RideHome> {
       final localPin = await secure.read(key: 'pin:$id');
       if (mounted)
         setState(() {
+          if (photoRequestedFor != id) driverPhoto = null;
           trip = t;
           pin = localPin;
+          pickup = LatLng((t['pickup_lat'] as num).toDouble(),(t['pickup_lng'] as num).toDouble());
+          drop = LatLng((t['drop_lat'] as num).toDouble(),(t['drop_lng'] as num).toDouble());
+          pickupLabel = '${t['pickup_text']}';
+          dropLabel = '${t['drop_text']}';
           rider = loc == null
               ? null
               : LatLng((loc['lat'] as num).toDouble(),
                   (loc['lng'] as num).toDouble());
         });
+      if (t['rider_id'] != null && photoRequestedFor != id &&
+          ['accepted', 'arrived', 'in_progress'].contains(t['status'])) {
+        photoRequestedFor = id;
+        try {
+          final bytes = await app.api.getBytes('/v1/trips/$id/driver-photo');
+          if (mounted) setState(() => driverPhoto = Uint8List.fromList(bytes));
+        } catch (_) { /* The vehicle and driver details remain available. */ }
+      }
     } catch (e) {
       if (!silent && mounted) setState(() => error = '$e');
     }
@@ -361,6 +380,7 @@ class _RideHomeState extends State<RideHome> {
         'pickup': point(pickup, pickupLabel),
         'drop': point(drop!, dropLabel),
         'vehicle': vehicle,
+        'pickup_note': pickupNote.text.trim(),
         'confirmed': true,
         'via_assistant': viaAssistant
       });
@@ -370,6 +390,7 @@ class _RideHomeState extends State<RideHome> {
         pin = '${d['pin']}';
         trip = Map<String, dynamic>.from(d['trip']);
       });
+      pickupNote.clear();
       await _loadActive();
     } catch (e) {
       if (mounted) setState(() => error = '$e');
@@ -559,6 +580,10 @@ class _RideHomeState extends State<RideHome> {
                           Text('₹${estimate!['rupees']}',
                               style: Theme.of(context).textTheme.headlineMedium)
                         ]))),
+          TextField(controller: pickupNote, maxLength: 160,
+            decoration: InputDecoration(labelText: app.tr('pickupNote'),
+              hintText: app.tr('pickupNoteHint'),
+              prefixIcon: const Icon(Icons.notes))),
           const SizedBox(height: 10),
           HaanButton(busy ? '…' : app.tr('book'),
               onPressed:
@@ -576,7 +601,8 @@ class _RideHomeState extends State<RideHome> {
         builder: (c) => AlertDialog(
                 title: Text(app.tr('readBack')),
                 content: Text(
-                    '$pickupLabel → $dropLabel\n$vehicle · ₹${estimate?['rupees']}'),
+                    '$pickupLabel → $dropLabel\n$vehicle · ₹${estimate?['rupees']}'
+                    '${pickupNote.text.trim().isEmpty ? '' : '\n${app.tr('pickupNote')}: ${pickupNote.text.trim()}'}'),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(c, false),
@@ -610,9 +636,38 @@ class _RideHomeState extends State<RideHome> {
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                            '${trip?['rider_name'] ?? 'Rider'} · ${trip?['vehicle_number'] ?? ''}',
-                            style: Theme.of(context).textTheme.titleLarge),
+                        Row(children: [
+                          CircleAvatar(radius: 28, backgroundColor: Colors.black12,
+                            backgroundImage: driverPhoto == null ? null : MemoryImage(driverPhoto!),
+                            child: driverPhoto == null ? const Icon(Icons.person) : null),
+                          const SizedBox(width: 12),
+                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('${trip?['rider_name'] ?? 'Rider'}',
+                                style: Theme.of(context).textTheme.titleLarge),
+                              Text('${trip?['rating_avg'] ?? 'New'} ★'),
+                            ])),
+                        ]),
+                        const SizedBox(height: 12),
+                        Text('${trip?['vehicle_make'] ?? ''} ${trip?['vehicle_model'] ?? ''} · ${trip?['vehicle_color'] ?? ''} · ${trip?['vehicle_type'] ?? ''}',
+                          style: Theme.of(context).textTheme.titleMedium),
+                        const SizedBox(height: 6),
+                        SelectableText('${trip?['vehicle_number'] ?? ''}',
+                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+                        Text(app.tr('verifyPlate')),
+                        if (rider != null && status == 'accepted')
+                          Text(() {
+                            final km = const Distance().as(LengthUnit.Kilometer, rider!, pickup) * 1.3;
+                            final minutes = (km / 18 * 60).ceil().clamp(1, 120);
+                            return app.language == 'hi'
+                                ? 'लगभग $minutes मिनट · ${km.toStringAsFixed(1)} किमी दूर'
+                                : 'About $minutes min · ${km.toStringAsFixed(1)} km away';
+                          }()),
+                        if ('${trip?['rider_phone'] ?? ''}'.isNotEmpty)
+                          TextButton.icon(onPressed: () => launchUrl(
+                            Uri(scheme: 'tel', path: '${trip?['rider_phone']}'),
+                            mode: LaunchMode.externalApplication),
+                            icon: const Icon(Icons.call), label: Text(app.tr('callDriver'))),
                         if (pin != null && status != 'in_progress')
                           Text('${app.tr('pin')}: $pin',
                               style:

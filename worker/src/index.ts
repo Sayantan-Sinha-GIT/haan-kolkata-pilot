@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { db, consumeLimit } from './db';
 import { hmac, randomDigits, randomToken, signAccess, verifyAccess, verifyPassword, decryptTotp, verifyTotp, passwordHash, newTotpSecret, encryptTotp, totpSetupKey } from './crypto';
-import { fare, haversineKm, validCoordinates, validPoint, scrubAssistantText, type Vehicle } from './rules';
+import { fare, haversineKm, normalizeVehicleNumber, validCoordinates, validFutureDate, validImageBytes, validPoint, scrubAssistantText, type Vehicle } from './rules';
 import { advanceMatch } from './matching';
 import { assistantIntent, broadcast, routeEstimate, searchPlaces, sendEmail, transcribe, TripRoom } from './services';
 import { sendPush } from './push';
@@ -160,9 +160,10 @@ api.post('/v1/assistant/transcribe', async c => {
 
 api.post('/v1/trips', async c => {
   const user = await requireRole(c.env,c.req.raw,['customer']); if (isResponse(user)) return user;
-  const input = await body<{ pickup: unknown; drop: unknown; vehicle: Vehicle; confirmed?: boolean; via_assistant?: boolean }>(c.req.raw);
+  const input = await body<{ pickup: unknown; drop: unknown; vehicle: Vehicle; pickup_note?: string; confirmed?: boolean; via_assistant?: boolean }>(c.req.raw);
   if (!input.confirmed) return error('Confirm the trip on screen before booking.', 'confirmation_required');
   if (!validPoint(input.pickup) || !validPoint(input.drop) || !['Bike','Auto','Cab'].includes(input.vehicle)) return error('Choose a pickup, destination and vehicle.', 'invalid_trip');
+  if (input.pickup_note !== undefined && (typeof input.pickup_note !== 'string' || input.pickup_note.trim().length > 160)) return error('Keep the pickup note under 160 characters.', 'invalid_pickup_note');
   const direct = haversineKm(input.pickup,input.drop);
   if (direct < 0.3) return error('Choose a destination at least 300 metres away.', 'too_close');
   const route=await routeEstimate(c.env,input.pickup,input.drop,input.vehicle);
@@ -171,8 +172,8 @@ api.post('/v1/trips', async c => {
   const amount=fare({base:Number(config.base),per_km:Number(config.per_km),per_min:Number(config.per_min),minimum:Number(config.minimum)},km,minutes);
   const pin=randomDigits(4),pinHash=await hmac(c.env.SESSION_SECRET,pin);
   try {
-    const [trip]=await sql`insert into trips(customer_id,vehicle_type,pickup_lat,pickup_lng,pickup_text,drop_lat,drop_lng,drop_text,estimated_km,estimated_min,estimate_rupees,pin_hash,via_assistant)
-      values(${user.id}::uuid,${input.vehicle}::vehicle_type,${input.pickup.lat},${input.pickup.lng},${input.pickup.text.trim()},${input.drop.lat},${input.drop.lng},${input.drop.text.trim()},${km},${minutes},${amount},${pinHash},${!!input.via_assistant})
+    const [trip]=await sql`insert into trips(customer_id,vehicle_type,pickup_lat,pickup_lng,pickup_text,pickup_note,drop_lat,drop_lng,drop_text,estimated_km,estimated_min,estimate_rupees,pin_hash,via_assistant)
+      values(${user.id}::uuid,${input.vehicle}::vehicle_type,${input.pickup.lat},${input.pickup.lng},${input.pickup.text.trim()},${input.pickup_note?.trim()||null},${input.drop.lat},${input.drop.lng},${input.drop.text.trim()},${km},${minutes},${amount},${pinHash},${!!input.via_assistant})
       returning id,status,estimate_rupees,estimated_km,estimated_min`;
     await advanceMatch(c.env,trip.id);
     const room=c.env.TRIP_ROOM.get(c.env.TRIP_ROOM.idFromName(trip.id));
@@ -201,12 +202,25 @@ api.get('/v1/trips/history', async c => {
 api.get('/v1/trips/:id', async c => {
   const user=await requireRole(c.env,c.req.raw,['customer','rider','super_admin','support_agent']);if(isResponse(user))return user;
   const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
-  const [trip]=await db(c.env)`select t.id,t.customer_id,t.rider_id,t.status,t.vehicle_type,t.pickup_lat,t.pickup_lng,t.pickup_text,t.drop_lat,t.drop_lng,t.drop_text,
+  const [trip]=await db(c.env)`select t.id,t.customer_id,t.rider_id,t.status,t.vehicle_type,t.pickup_lat,t.pickup_lng,t.pickup_text,t.pickup_note,t.drop_lat,t.drop_lng,t.drop_text,
     t.estimated_km,t.estimated_min,t.estimate_rupees,t.final_rupees,t.created_at,t.accepted_at,t.arrived_at,t.started_at,t.completed_at,
-    u.name as rider_name,rp.vehicle_number,rp.rating_avg from trips t left join users u on u.id=t.rider_id left join rider_profiles rp on rp.user_id=t.rider_id where t.id=${id}::uuid`;
+    ru.name as rider_name,ru.phone as rider_phone,cu.name as customer_name,cu.phone as customer_phone,
+    rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,rp.rating_avg
+    from trips t left join users ru on ru.id=t.rider_id left join users cu on cu.id=t.customer_id
+    left join rider_profiles rp on rp.user_id=t.rider_id where t.id=${id}::uuid`;
   if(!trip || (user.role==='customer'&&trip.customer_id!==user.id) || (user.role==='rider'&&trip.rider_id!==user.id))return error('Trip not found.','not_found',404);
   const [location]=await db(c.env)`select lat,lng,heading,recorded_at from trip_locations where trip_id=${id}::uuid order by recorded_at desc limit 1`;
   return c.json({ trip, location:location||null });
+});
+api.get('/v1/trips/:id/driver-photo', async c => {
+  const user=await requireRole(c.env,c.req.raw,['customer']);if(isResponse(user))return user;
+  const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
+  const [trip]=await db(c.env)`select rp.selfie_key from trips t join rider_profiles rp on rp.user_id=t.rider_id
+    where t.id=${id}::uuid and t.customer_id=${user.id}::uuid and t.status in ('accepted','arrived','in_progress')`;
+  if(!trip?.selfie_key)return error('Driver photo unavailable.','photo_unavailable',404);
+  const photo=await c.env.DOCUMENTS.getWithMetadata<{contentType:string}>(trip.selfie_key,'arrayBuffer');
+  if(!photo.value)return error('Driver photo unavailable.','photo_unavailable',404);
+  return new Response(photo.value,{headers:{'Content-Type':photo.metadata?.contentType||'image/jpeg','Cache-Control':'private, max-age=300','X-Content-Type-Options':'nosniff'}});
 });
 api.get('/v1/trips/:id/route', async c => {
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
@@ -261,8 +275,14 @@ api.post('/v1/trips/:id/cancel', async c => {
 
 api.get('/v1/rider/offers', async c => {
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
-  return c.json({offers:await db(c.env)`select o.id,o.trip_id,o.expires_at,t.pickup_text,t.drop_text,t.estimated_km,t.estimate_rupees
-    from trip_offers o join trips t on t.id=o.trip_id where o.rider_id=${user.id}::uuid and o.responded_at is null and o.expires_at>now() and t.status='searching' order by o.offered_at desc`});
+  const offers=await db(c.env)`select o.id,o.trip_id,o.expires_at,t.pickup_text,t.drop_text,t.estimated_km,t.estimate_rupees,
+    t.pickup_lat,t.pickup_lng,rp.last_lat,rp.last_lng
+    from trip_offers o join trips t on t.id=o.trip_id join rider_profiles rp on rp.user_id=o.rider_id
+    where o.rider_id=${user.id}::uuid and o.responded_at is null and o.expires_at>now() and t.status='searching' order by o.offered_at desc`;
+  return c.json({offers:offers.map(o=>({id:o.id,trip_id:o.trip_id,expires_at:o.expires_at,pickup_text:o.pickup_text,
+    drop_text:o.drop_text,estimated_km:o.estimated_km,estimate_rupees:o.estimate_rupees,
+    pickup_distance_km:o.last_lat==null||o.last_lng==null?null:Math.round(haversineKm(
+      {lat:Number(o.last_lat),lng:Number(o.last_lng)},{lat:Number(o.pickup_lat),lng:Number(o.pickup_lng)})*10)/10}))});
 });
 api.post('/v1/rider/offers/:id/accept', async c => {
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
@@ -341,10 +361,11 @@ api.patch('/v1/profile',async c=>{
   const user=await requireRole(c.env,c.req.raw,['customer','rider']);if(isResponse(user))return user;
   const input=await body<{name?:string;phone?:string;emergency_phone?:string;language?:string;theme?:string;push_token?:string}>(c.req.raw);
   const name=typeof input.name==='string'?input.name.trim().slice(0,80):null;
-  const phone=typeof input.phone==='string'?input.phone.trim().slice(0,20):null;
+  const phone=typeof input.phone==='string'?input.phone.replace(/[\s()-]/g,'').trim().slice(0,20):null;
   const hasEmergency=typeof input.emergency_phone==='string';
   const emergency=hasEmergency?input.emergency_phone!.trim():null;
   if(emergency && !/^\+?[0-9 ()-]{7,20}$/.test(emergency))return error('Check the emergency contact number.','invalid_phone');
+  if(phone && !/^(?:\+?91)?[6-9]\d{9}$/.test(phone))return error('Enter a valid Indian mobile number.','invalid_phone');
   const lang=['en','hi'].includes(input.language||'')?input.language:null;
   const theme=['dark','light','system'].includes(input.theme||'')?input.theme:null;
   const token=typeof input.push_token==='string'?input.push_token.slice(0,512):null;
@@ -437,28 +458,55 @@ api.post('/v1/tickets/:id/messages',async c=>{
 
 api.get('/v1/rider/profile',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
-  const [profile]=await db(c.env)`select vehicle_type,vehicle_number,upi_id,verification_status,rejection_reason,is_online,rating_avg,
-    licence_key is not null as licence_uploaded,rc_key is not null as rc_uploaded,selfie_key is not null as selfie_uploaded
-    from rider_profiles where user_id=${user.id}::uuid`;
+  const [profile]=await db(c.env)`select rp.vehicle_type,rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,
+    rp.licence_number,rp.insurance_expiry,rp.permit_expiry,rp.upi_id,rp.verification_status,rp.rejection_reason,rp.is_online,rp.rating_avg,u.phone,
+    rp.licence_key is not null as licence_uploaded,rp.rc_key is not null as rc_uploaded,rp.selfie_key is not null as selfie_uploaded,
+    rp.insurance_key is not null as insurance_uploaded,rp.permit_key is not null as permit_uploaded,
+    (u.phone is not null and rp.vehicle_type is not null and rp.vehicle_number is not null and rp.vehicle_make is not null
+      and rp.vehicle_model is not null and rp.vehicle_color is not null and rp.vehicle_year is not null and rp.licence_number is not null
+      and rp.licence_key is not null and rp.rc_key is not null and rp.selfie_key is not null and rp.insurance_key is not null
+      and rp.insurance_expiry>=current_date and (rp.vehicle_type='Bike' or (rp.permit_key is not null and rp.permit_expiry>=current_date))) as registration_complete
+    from rider_profiles rp join users u on u.id=rp.user_id where rp.user_id=${user.id}::uuid`;
   return c.json({profile:profile||null});
 });
 api.patch('/v1/rider/profile',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
-  const input=await body<{vehicle_type?:Vehicle;vehicle_number?:string;upi_id?:string}>(c.req.raw);
-  if(!['Bike','Auto','Cab'].includes(input.vehicle_type||'')||!input.vehicle_number?.trim())return error('Add a vehicle type and number.','invalid_vehicle');
-  const [profile]=await db(c.env)`insert into rider_profiles(user_id,vehicle_type,vehicle_number,upi_id)
-    values(${user.id}::uuid,${input.vehicle_type}::vehicle_type,${input.vehicle_number.trim().slice(0,24)},${(input.upi_id||'').slice(0,100)})
-    on conflict(user_id) do update set vehicle_type=excluded.vehicle_type,vehicle_number=excluded.vehicle_number,upi_id=excluded.upi_id,
+  const input=await body<{vehicle_type?:Vehicle;vehicle_number?:string;vehicle_make?:string;vehicle_model?:string;vehicle_color?:string;
+    vehicle_year?:number;licence_number?:string;insurance_expiry?:string;permit_expiry?:string;upi_id?:string}>(c.req.raw);
+  const plate=normalizeVehicleNumber(input.vehicle_number);
+  const make=input.vehicle_make?.trim(),model=input.vehicle_model?.trim(),color=input.vehicle_color?.trim();
+  const licence=input.licence_number?.trim().toUpperCase();
+  if(!['Bike','Auto','Cab'].includes(input.vehicle_type||'')||!plate||!make||make.length<2||make.length>40||!model||model.length<2||model.length>50
+    ||!color||color.length<3||color.length>30||!Number.isInteger(input.vehicle_year)||input.vehicle_year!<1995||input.vehicle_year!>new Date().getUTCFullYear()+1
+    ||!licence||!/^[A-Z0-9/-]{6,24}$/.test(licence)||!validFutureDate(input.insurance_expiry)
+    ||(input.vehicle_type!=='Bike'&&!validFutureDate(input.permit_expiry)))return error('Check the vehicle, licence and document expiry details.','invalid_vehicle');
+  const [profile]=await db(c.env)`insert into rider_profiles(user_id,vehicle_type,vehicle_number,vehicle_make,vehicle_model,vehicle_color,vehicle_year,
+      licence_number,insurance_expiry,permit_expiry,upi_id)
+    values(${user.id}::uuid,${input.vehicle_type}::vehicle_type,${plate},${make},${model},${color},${input.vehicle_year!},
+      ${licence},${input.insurance_expiry!}::date,${input.vehicle_type==='Bike'?null:input.permit_expiry!}::date,${(input.upi_id||'').slice(0,100)})
+    on conflict(user_id) do update set vehicle_type=excluded.vehicle_type,vehicle_number=excluded.vehicle_number,
+      vehicle_make=excluded.vehicle_make,vehicle_model=excluded.vehicle_model,vehicle_color=excluded.vehicle_color,vehicle_year=excluded.vehicle_year,
+      licence_number=excluded.licence_number,insurance_expiry=excluded.insurance_expiry,permit_expiry=excluded.permit_expiry,upi_id=excluded.upi_id,
+      licence_key=case when rider_profiles.licence_number is not null and rider_profiles.licence_number is distinct from excluded.licence_number then null else rider_profiles.licence_key end,
+      rc_key=case when rider_profiles.vehicle_number is not null and (rider_profiles.vehicle_number is distinct from excluded.vehicle_number
+        or rider_profiles.vehicle_type is distinct from excluded.vehicle_type or rider_profiles.vehicle_make is distinct from excluded.vehicle_make
+        or rider_profiles.vehicle_model is distinct from excluded.vehicle_model or rider_profiles.vehicle_year is distinct from excluded.vehicle_year)
+        then null else rider_profiles.rc_key end,
+      insurance_key=case when rider_profiles.insurance_expiry is not null and rider_profiles.insurance_expiry is distinct from excluded.insurance_expiry
+        then null else rider_profiles.insurance_key end,
+      permit_key=case when rider_profiles.permit_expiry is not null and rider_profiles.permit_expiry is distinct from excluded.permit_expiry
+        then null else rider_profiles.permit_key end,
       verification_status='pending',rejection_reason=null,is_online=false returning vehicle_type,vehicle_number,verification_status`;
   return c.json({profile});
 });
 api.post('/v1/rider/documents/:kind',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
-  const kind=c.req.param('kind');if(!['licence','rc','selfie'].includes(kind))return error('Unknown document.','invalid_document');
+  const kind=c.req.param('kind');if(!['licence','rc','selfie','insurance','permit'].includes(kind))return error('Unknown document.','invalid_document');
   const contentType=c.req.header('Content-Type')||'';
   if(!['image/jpeg','image/png','image/webp'].includes(contentType))return error('Upload a JPEG, PNG or WebP image.','invalid_file_type');
   const bytes=await c.req.arrayBuffer();
   if(bytes.byteLength===0||bytes.byteLength>500_000)return error('Each document must be under 500 KB.','file_too_large',413);
+  if(!validImageBytes(bytes,contentType))return error('The file does not match its image type.','invalid_file_type');
   const key=`riders/${user.id}/${kind}/${crypto.randomUUID()}`;
   await c.env.DOCUMENTS.put(key,bytes,{metadata:{contentType}});
   const sql=db(c.env);
@@ -466,6 +514,8 @@ api.post('/v1/rider/documents/:kind',async c=>{
   if(kind==='licence')await sql`update rider_profiles set licence_key=${key},verification_status='pending',is_online=false where user_id=${user.id}::uuid`;
   if(kind==='rc')await sql`update rider_profiles set rc_key=${key},verification_status='pending',is_online=false where user_id=${user.id}::uuid`;
   if(kind==='selfie')await sql`update rider_profiles set selfie_key=${key},verification_status='pending',is_online=false where user_id=${user.id}::uuid`;
+  if(kind==='insurance')await sql`update rider_profiles set insurance_key=${key},verification_status='pending',is_online=false where user_id=${user.id}::uuid`;
+  if(kind==='permit')await sql`update rider_profiles set permit_key=${key},verification_status='pending',is_online=false where user_id=${user.id}::uuid`;
   return c.json({ok:true});
 });
 api.post('/v1/rider/online',async c=>{
@@ -476,8 +526,13 @@ api.post('/v1/rider/online',async c=>{
   const sql=db(c.env);
   const rows=await sql`update rider_profiles set is_online=${input.online},last_lat=case when ${input.online} then ${input.lat??null} else last_lat end,
     last_lng=case when ${input.online} then ${input.lng??null} else last_lng end,last_seen_at=case when ${input.online} then now() else last_seen_at end
-    where user_id=${user.id}::uuid and verification_status='approved' returning is_online`;
-  if(!rows.length)return error('Wait for rider approval before going online.','not_approved',403);
+    where user_id=${user.id}::uuid and verification_status='approved'
+      and (not ${input.online} or (vehicle_type is not null and vehicle_number is not null and vehicle_make is not null
+        and vehicle_model is not null and vehicle_color is not null and vehicle_year is not null and licence_number is not null
+        and licence_key is not null and rc_key is not null and selfie_key is not null and insurance_key is not null
+        and insurance_expiry>=current_date and (vehicle_type='Bike' or (permit_key is not null and permit_expiry>=current_date))
+        and exists(select 1 from users where id=${user.id}::uuid and phone is not null))) returning is_online`;
+  if(!rows.length)return error('Complete verification and renew expired documents before going online.','not_approved',403);
   return c.json({online:rows[0].is_online});
 });
 api.post('/v1/rider/heartbeat',async c=>{
@@ -557,19 +612,19 @@ api.get('/v1/admin/riders/:id',async c=>{
   if(!rider)return error('Rider not found.','not_found',404);
   const expires=Date.now()+5*60_000;
   const docs:Record<string,string>={};
-  for(const kind of ['licence','rc','selfie'])if(rider[`${kind}_key`]){
+  for(const kind of ['licence','rc','selfie','insurance','permit'])if(rider[`${kind}_key`]){
     const sig=await hmac(c.env.SESSION_SECRET,`${id}:${kind}:${expires}`);
     docs[kind]=`/v1/admin/riders/${id}/documents/${kind}?expires=${expires}&sig=${sig}`;
   }
-  delete rider.licence_key;delete rider.rc_key;delete rider.selfie_key;
+  for(const kind of ['licence','rc','selfie','insurance','permit'])delete rider[`${kind}_key`];
   return c.json({rider,documents:docs});
 });
 api.get('/v1/admin/riders/:id/documents/:kind',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
   const id=c.req.param('id'),kind=c.req.param('kind'),expires=Number(c.req.query('expires')),sig=c.req.query('sig');
-  if(!uuidOk(id)||!['licence','rc','selfie'].includes(kind)||!Number.isFinite(expires)||expires<Date.now()||expires>Date.now()+5*60_000
+  if(!uuidOk(id)||!['licence','rc','selfie','insurance','permit'].includes(kind)||!Number.isFinite(expires)||expires<Date.now()||expires>Date.now()+5*60_000
     ||sig!==await hmac(c.env.SESSION_SECRET,`${id}:${kind}:${expires}`))return error('Document link expired. Open the rider again.','document_expired',403);
-  const [rider]=await db(c.env)`select licence_key,rc_key,selfie_key from rider_profiles where user_id=${id}::uuid`;
+  const [rider]=await db(c.env)`select licence_key,rc_key,selfie_key,insurance_key,permit_key from rider_profiles where user_id=${id}::uuid`;
   const key=rider?.[`${kind}_key`];if(!key)return error('Document not found.','not_found',404);
   const object=await c.env.DOCUMENTS.getWithMetadata<{contentType:string}>(key,'arrayBuffer');
   if(!object.value)return error('Document not found.','not_found',404);
@@ -584,9 +639,13 @@ api.post('/v1/admin/riders/:id/verify',async c=>{
   const sql=db(c.env);
   const [rider]=await sql`update rider_profiles set verification_status=${input.decision}::verification_status,
     rejection_reason=${input.decision==='rejected'?(input.reason||'').slice(0,300):null},is_online=false
-    where user_id=${id}::uuid and licence_key is not null and rc_key is not null and selfie_key is not null
+    where user_id=${id}::uuid and (${input.decision}='rejected' or (vehicle_type is not null and vehicle_number is not null and vehicle_make is not null
+      and vehicle_model is not null and vehicle_color is not null and vehicle_year is not null and licence_number is not null
+      and licence_key is not null and rc_key is not null and selfie_key is not null and insurance_key is not null
+      and insurance_expiry>=current_date and (vehicle_type='Bike' or (permit_key is not null and permit_expiry>=current_date))
+      and exists(select 1 from users where id=${id}::uuid and phone is not null)))
     returning user_id`;
-  if(!rider)return error('All three documents are required.','documents_missing',409);
+  if(!rider)return error('Complete the driver, vehicle and current document details before review.','documents_missing',409);
   await audit(c.env,user,'rider_verify',id,{decision:input.decision,reason:input.reason||null},c.req.raw);
   const [recipient]=await sql`select email from users where id=${id}::uuid`;
   if(recipient)c.executionCtx.waitUntil(sendEmail(c.env,recipient.email,'Haan rider verification',input.decision==='approved'?'Your rider account is approved.':`Your rider documents need changes: ${input.reason}`));

@@ -334,6 +334,7 @@ class _RiderHomeState extends State<RiderHome> {
                 content: TextField(
                     controller: ctl,
                     keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     maxLength: 4,
                     autofocus: true,
                     decoration: const InputDecoration(hintText: '0000')),
@@ -345,21 +346,29 @@ class _RiderHomeState extends State<RiderHome> {
                       onPressed: () => Navigator.pop(c, ctl.text),
                       child: Text(app.tr('start')))
                 ]));
-    if (pin != null) tripAction('start', body: {'pin': pin});
+    if (pin != null && RegExp(r'^\d{4}$').hasMatch(pin)) {
+      tripAction('start', body: {'pin': pin});
+    } else if (pin != null && mounted) {
+      showMessage(context, app.language == 'hi' ? 'ग्राहक से 4 अंकों का PIN पूछें।' : 'Ask the customer for the 4-digit PIN.');
+    }
   }
 
   Future<void> navigate(bool toPickup) async {
     if (trip == null) return;
     final lat = trip![toPickup ? 'pickup_lat' : 'drop_lat'],
         lng = trip![toPickup ? 'pickup_lng' : 'drop_lng'];
-    final uri = Uri.parse('geo:$lat,$lng?q=$lat,$lng');
+    final uri = googleMapsDirections(
+        lat: (lat as num).toDouble(),
+        lng: (lng as num).toDouble(),
+        bike: trip!['vehicle_type'] == 'Bike');
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication) && mounted)
-      showMessage(context, 'Could not open maps. Follow the in-app map.');
+      showMessage(context, app.language == 'hi' ? 'Google Maps नहीं खुला। ऐप में रास्ता देखें।' : 'Could not open Google Maps. Follow the in-app map.');
   }
 
   @override
   Widget build(BuildContext context) {
-    final verified = riderProfile?['verification_status'] == 'approved';
+    final verified = riderProfile?['verification_status'] == 'approved' &&
+        riderProfile?['registration_complete'] == true;
     if (verified && trip == null && offers.isNotEmpty) {
       return Container(
           decoration: const BoxDecoration(gradient: LinearGradient(
@@ -425,10 +434,10 @@ class _RiderHomeState extends State<RiderHome> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (error != null) HaanError(error!, retry: refresh),
-                        if (riderProfile == null || !verified)
-                          _approvalPanel()
-                        else if (trip != null)
+                        if (trip != null)
                           _tripPanel()
+                        else if (riderProfile == null || !verified)
+                          _approvalPanel()
                         else if (offers.isNotEmpty)
                           _offerPanel()
                         else
@@ -485,6 +494,8 @@ class _RiderHomeState extends State<RiderHome> {
       const SizedBox(height: 12),
       Text('${o['pickup_text']} → ${o['drop_text']}',
           style: Theme.of(context).textTheme.titleLarge),
+      if (o['pickup_distance_km'] != null)
+        Text('${app.language == 'hi' ? 'पिकअप' : 'Pickup'}: ${o['pickup_distance_km']} km ${app.language == 'hi' ? 'दूर' : 'away'}'),
       const SizedBox(height: 10),
       Text('${o['estimated_km']} km  ·  ₹${o['estimate_rupees']}',
           style: Theme.of(context).textTheme.headlineMedium),
@@ -517,23 +528,31 @@ class _RiderHomeState extends State<RiderHome> {
       const SizedBox(height: 15),
       Text('${trip!['pickup_text']} → ${trip!['drop_text']}',
           style: Theme.of(context).textTheme.titleLarge),
+      if ('${trip!['customer_name'] ?? ''}'.isNotEmpty)
+        Text('${app.language == 'hi' ? 'ग्राहक' : 'Customer'}: ${trip!['customer_name']}'),
+      if ('${trip!['pickup_note'] ?? ''}'.isNotEmpty)
+        Card(child: Padding(padding: const EdgeInsets.all(12),
+          child: Text('${app.tr('pickupNote')}: ${trip!['pickup_note']}'))),
       const SizedBox(height: 6),
       Text('${trip!['vehicle_type']} · ₹${trip!['estimate_rupees']}',
           style: Theme.of(context).textTheme.titleMedium),
       const SizedBox(height: 14),
-      if (status == 'accepted')
-        HaanButton(app.tr('arrived'),
-            onPressed: busy ? null : () => tripAction('arrived')),
-      if (status == 'arrived')
-        HaanButton(app.tr('start'), onPressed: busy ? null : startWithPin),
-      if (status == 'in_progress')
-        HaanButton(app.tr('end'),
-            onPressed: busy ? null : () => tripAction('complete')),
+      HaanButton(status == 'in_progress' ? app.tr('navigateDrop') : app.tr('navigatePickup'),
+          onPressed: () => navigate(status != 'in_progress')),
       const SizedBox(height: 10),
-      OutlinedButton.icon(
-          onPressed: () => navigate(status != 'in_progress'),
-          icon: const Icon(Icons.navigation),
-          label: Text(app.language=='hi'?'मैप ऐप में खोलें':'Open in maps app')),
+      if (status == 'accepted')
+        OutlinedButton.icon(onPressed: busy ? null : () => tripAction('arrived'),
+          icon: const Icon(Icons.flag), label: Text(app.tr('arrived'))),
+      if (status == 'arrived')
+        OutlinedButton.icon(onPressed: busy ? null : startWithPin,
+          icon: const Icon(Icons.pin), label: Text(app.tr('askPin'))),
+      if (status == 'in_progress')
+        OutlinedButton.icon(onPressed: busy ? null : () => tripAction('complete'),
+          icon: const Icon(Icons.check_circle), label: Text(app.tr('end'))),
+      if ('${trip!['customer_phone'] ?? ''}'.isNotEmpty)
+        TextButton.icon(
+          onPressed: () => launchUrl(Uri(scheme: 'tel', path: '${trip!['customer_phone']}'), mode: LaunchMode.externalApplication),
+          icon: const Icon(Icons.call), label: Text(app.tr('contact'))),
       if (status != 'in_progress')
         TextButton(
             onPressed: () async {
@@ -571,7 +590,12 @@ class Onboarding extends StatefulWidget {
 }
 
 class _OnboardingState extends State<Onboarding> {
-  final name = TextEditingController(), plate = TextEditingController(), upi = TextEditingController();
+  final name = TextEditingController(), phone = TextEditingController(),
+      plate = TextEditingController(), make = TextEditingController(),
+      model = TextEditingController(), color = TextEditingController(),
+      year = TextEditingController(), licenceNumber = TextEditingController(),
+      insuranceExpiry = TextEditingController(), permitExpiry = TextEditingController(),
+      upi = TextEditingController();
   String vehicle = 'Bike';
   Map<String, dynamic>? profile;
   String? error;
@@ -580,6 +604,7 @@ class _OnboardingState extends State<Onboarding> {
   void initState() {
     super.initState();
     name.text='${app.profile?['name'] ?? ''}';
+    phone.text='${app.profile?['phone'] ?? ''}';
     load();
   }
 
@@ -590,6 +615,14 @@ class _OnboardingState extends State<Onboarding> {
         profile =
             d['profile'] == null ? {} : Map<String, dynamic>.from(d['profile']);
         plate.text = '${profile?['vehicle_number'] ?? ''}';
+        make.text = '${profile?['vehicle_make'] ?? ''}';
+        model.text = '${profile?['vehicle_model'] ?? ''}';
+        color.text = '${profile?['vehicle_color'] ?? ''}';
+        year.text = '${profile?['vehicle_year'] ?? ''}';
+        licenceNumber.text = '${profile?['licence_number'] ?? ''}';
+        insuranceExpiry.text = '${profile?['insurance_expiry'] ?? ''}'.split('T').first;
+        permitExpiry.text = '${profile?['permit_expiry'] ?? ''}'.split('T').first;
+        phone.text = '${profile?['phone'] ?? app.profile?['phone'] ?? ''}';
         upi.text = '${profile?['upi_id'] ?? ''}';
         vehicle = '${profile?['vehicle_type'] ?? 'Bike'}';
       });
@@ -601,7 +634,10 @@ class _OnboardingState extends State<Onboarding> {
   @override
   void dispose() {
     name.dispose();
+    phone.dispose();
     plate.dispose();
+    make.dispose();model.dispose();color.dispose();year.dispose();
+    licenceNumber.dispose();insuranceExpiry.dispose();permitExpiry.dispose();
     upi.dispose();
     super.dispose();
   }
@@ -610,11 +646,18 @@ class _OnboardingState extends State<Onboarding> {
     setState(() => busy = true);
     try {
       if(name.text.trim().length<2)throw const ApiException('Enter your name for rider review.','missing_name',400);
-      await app.api.patch('/v1/profile',{'name':name.text.trim()});
+      await app.api.patch('/v1/profile',{'name':name.text.trim(),'phone':phone.text.trim()});
       await app.refreshProfile();
       await app.api.patch('/v1/rider/profile', {
         'vehicle_type': vehicle,
         'vehicle_number': plate.text,
+        'vehicle_make': make.text,
+        'vehicle_model': model.text,
+        'vehicle_color': color.text,
+        'vehicle_year': int.tryParse(year.text),
+        'licence_number': licenceNumber.text,
+        'insurance_expiry': insuranceExpiry.text,
+        'permit_expiry': vehicle == 'Bike' ? null : permitExpiry.text,
         'upi_id': upi.text
       });
       await load();
@@ -624,6 +667,16 @@ class _OnboardingState extends State<Onboarding> {
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  Future<void> pickExpiry(TextEditingController controller) async {
+    final now = DateTime.now();
+    final selected = await showDatePicker(context: context,
+      initialDate: (DateTime.tryParse(controller.text)?.isAfter(now) ?? false)
+          ? DateTime.parse(controller.text) : now,
+      firstDate: now, lastDate: DateTime(now.year + 15));
+    if (selected != null) setState(() => controller.text =
+      '${selected.year.toString().padLeft(4, '0')}-${selected.month.toString().padLeft(2, '0')}-${selected.day.toString().padLeft(2, '0')}');
   }
 
   Future<void> upload(String kind) async {
@@ -675,6 +728,9 @@ class _OnboardingState extends State<Onboarding> {
                   maxLength: 80,
                   textCapitalization: TextCapitalization.words,
                   decoration: InputDecoration(labelText: app.tr('yourName'))),
+              TextField(controller: phone, keyboardType: TextInputType.phone,
+                maxLength: 13, decoration: InputDecoration(labelText: app.tr('phone'),
+                  helperText: app.tr('phoneHelp'))),
               const SizedBox(height: 10),
               SegmentedButton<String>(segments: [
                 ButtonSegment(value: 'Bike', label: Text(app.tr('bike'))),
@@ -686,8 +742,27 @@ class _OnboardingState extends State<Onboarding> {
               const SizedBox(height: 14),
               TextField(
                   controller: plate,
+                  textCapitalization: TextCapitalization.characters,
                   decoration:
                       InputDecoration(labelText: app.tr('vehicleNumber'))),
+              TextField(controller: make, textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(labelText: app.tr('vehicleMake'))),
+              TextField(controller: model, textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(labelText: app.tr('vehicleModel'))),
+              TextField(controller: color, textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(labelText: app.tr('vehicleColor'))),
+              TextField(controller: year, keyboardType: TextInputType.number,
+                maxLength: 4, decoration: InputDecoration(labelText: app.tr('vehicleYear'))),
+              TextField(controller: licenceNumber, textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(labelText: app.tr('licenceNumber'))),
+              TextField(controller: insuranceExpiry, readOnly: true,
+                onTap: () => pickExpiry(insuranceExpiry),
+                decoration: InputDecoration(labelText: app.tr('insuranceExpiry'),
+                  suffixIcon: const Icon(Icons.calendar_month))),
+              if (vehicle != 'Bike') TextField(controller: permitExpiry, readOnly: true,
+                onTap: () => pickExpiry(permitExpiry),
+                decoration: InputDecoration(labelText: app.tr('permitExpiry'),
+                  suffixIcon: const Icon(Icons.calendar_month))),
               const SizedBox(height: 12),
               TextField(
                   controller: upi,
@@ -696,7 +771,8 @@ class _OnboardingState extends State<Onboarding> {
               HaanButton(busy ? '…' : app.tr('save'),
                   onPressed: busy ? null : save),
               const SizedBox(height: 25),
-              for (final kind in ['licence', 'rc', 'selfie'])
+              Text(app.tr('documentsHelp'), style: Theme.of(context).textTheme.bodyMedium),
+              for (final kind in ['licence', 'rc', 'selfie', 'insurance', if (vehicle != 'Bike') 'permit'])
                 Card(
                     child: ListTile(
                         leading: Icon(

@@ -43,17 +43,25 @@ try {
   await expectStatus('rider online', await call('/v1/rider/online','POST',{online:true,lat:22.5726,lng:88.3639},riderToken),200,data=>data.online===true);
   await expectStatus('invalid heartbeat denied', await call('/v1/rider/heartbeat','POST',{lat:22.57,lng:200},riderToken),400);
   await expectStatus('valid heartbeat', await call('/v1/rider/heartbeat','POST',{lat:22.5726,lng:88.3639},riderToken),200);
-  const created = await expectStatus('trip created', await call('/v1/trips','POST',{pickup,drop,vehicle:'Bike',confirmed:true},customerToken),201,data=>/^\d{4}$/.test(data.pin));
+  const created = await expectStatus('trip created', await call('/v1/trips','POST',{pickup,drop,vehicle:'Bike',pickup_note:'Meet by the north gate',confirmed:true},customerToken),201,data=>/^\d{4}$/.test(data.pin));
   const id = created.trip.id;
   await expectStatus('second active trip blocked', await call('/v1/trips','POST',{pickup,drop,vehicle:'Bike',confirmed:true},customerToken),409);
-  const offers = await expectStatus('offer listed', await call('/v1/rider/offers','GET',undefined,riderToken),200,data=>data.offers.some(x=>x.trip_id===id));
+  const offers = await expectStatus('offer listed with pickup distance', await call('/v1/rider/offers','GET',undefined,riderToken),200,data=>data.offers.some(x=>x.trip_id===id&&typeof x.pickup_distance_km==='number'&&Number.isFinite(x.pickup_distance_km)));
   const offer = offers.offers.find(x=>x.trip_id===id);
   await expectStatus('offer accepted', await call(`/v1/rider/offers/${offer.id}/accept`,'POST',{},riderToken),200);
+  await expectStatus('matched identity and pickup note visible',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,
+    d=>d.trip.pickup_note==='Meet by the north gate'&&d.trip.vehicle_number==='WB12AB1234'&&d.trip.vehicle_make==='Hero'&&d.trip.rider_phone==='9876543210');
+  const photo=async auth=>{const r=await fetch(`${base}/v1/trips/${id}/driver-photo`,{headers:auth?{Authorization:`Bearer ${auth}`}:{}});return {status:r.status,type:r.headers.get('content-type'),size:(await r.arrayBuffer()).byteLength}};
+  const ownPhoto=await photo(customerToken);if(ownPhoto.status!==200||!ownPhoto.type?.startsWith('image/')||ownPhoto.size<1000)throw Error('Matched customer photo unavailable');checks++;console.log('PASS matched customer sees photo');
+  const riderPhoto=await photo(riderToken);if(riderPhoto.status!==403)throw Error('Rider photo authorization failed');checks++;console.log('PASS rider cannot fetch customer-only photo');
+  const anonymousPhoto=await photo();if(anonymousPhoto.status!==401)throw Error('Anonymous photo authorization failed');checks++;console.log('PASS anonymous photo denied');
+  await expectStatus('route targets pickup before PIN',await call(`/v1/trips/${id}/route?lat=22.5726&lng=88.3639`,'GET',undefined,riderToken),200,d=>Number(d.target.lat)===pickup.lat);
   await expectStatus('double accept denied', await call(`/v1/rider/offers/${offer.id}/accept`,'POST',{},riderToken),409);
   await expectStatus('PIN before arrival denied', await call(`/v1/trips/${id}/start`,'POST',{pin:created.pin},riderToken),409);
   await expectStatus('arrived', await call(`/v1/trips/${id}/arrived`,'POST',{},riderToken),200);
   await expectStatus('wrong PIN counted', await call(`/v1/trips/${id}/start`,'POST',{pin:created.pin==='0000'?'1111':'0000'},riderToken),400,data=>data.attempts_left===4);
   await expectStatus('correct PIN starts', await call(`/v1/trips/${id}/start`,'POST',{pin:created.pin},riderToken),200);
+  await expectStatus('route targets drop after PIN',await call(`/v1/trips/${id}/route?lat=22.5726&lng=88.3639`,'GET',undefined,riderToken),200,d=>Number(d.target.lat)===drop.lat);
   await expectStatus('invalid heading denied', await call(`/v1/trips/${id}/location`,'POST',{lat:22.575,lng:88.36,heading:400},riderToken),400);
   await expectStatus('location accepted', await call(`/v1/trips/${id}/location`,'POST',{lat:22.575,lng:88.36,heading:90},riderToken),200);
   await expectStatus('trip visible to customer', await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,data=>data.trip.status==='in_progress' && Number(data.location.lat)===22.575);
@@ -63,6 +71,7 @@ try {
   const badSig = new URLSearchParams(sharedUrl.search); badSig.set('sig','0'.repeat(64));
   await expectStatus('invalid share signature denied', await call(`/v1/shared/${id}?${badSig}`),404);
   await expectStatus('trip completed', await call(`/v1/trips/${id}/complete`,'POST',{final_km:1000},riderToken),200,data=>Number(data.trip.final_rupees)<=Number(created.trip.estimate_rupees)*1.5+0.5);
+  const oldPhoto=await photo(customerToken);if(oldPhoto.status!==404)throw Error('Completed trip photo should no longer be shared');checks++;console.log('PASS photo access ends with trip');
   await expectStatus('double completion denied', await call(`/v1/trips/${id}/complete`,'POST',{},riderToken),409);
   await expectStatus('customer rating', await call(`/v1/trips/${id}/rating`,'POST',{stars:5,comment:'QA'},customerToken),200);
   await expectStatus('duplicate rating denied', await call(`/v1/trips/${id}/rating`,'POST',{stars:5},customerToken),409);

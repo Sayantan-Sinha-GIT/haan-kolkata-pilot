@@ -28,7 +28,12 @@ export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
     *power(sin(radians(rp.last_lng-${Number(trip.pickup_lng)})/2),2)))) as km
     from rider_profiles rp join users u on u.id=rp.user_id
     where rp.is_online and rp.verification_status='approved' and rp.vehicle_type=${trip.vehicle_type}::vehicle_type
-      and rp.last_seen_at>now()-interval '90 seconds' and not u.is_blocked
+      and rp.last_seen_at>now()-interval '90 seconds' and not u.is_blocked and u.phone is not null
+      and rp.vehicle_number is not null and rp.vehicle_make is not null and rp.vehicle_model is not null
+      and rp.vehicle_color is not null and rp.vehicle_year is not null and rp.licence_number is not null
+      and rp.licence_key is not null and rp.rc_key is not null and rp.selfie_key is not null
+      and rp.insurance_key is not null and rp.insurance_expiry>=current_date
+      and (rp.vehicle_type='Bike' or (rp.permit_key is not null and rp.permit_expiry>=current_date))
       and not exists(select 1 from trip_offers o where o.trip_id=${tripId}::uuid and o.rider_id=rp.user_id)
       and not exists(select 1 from trips t where t.rider_id=rp.user_id and t.status in ('accepted','arrived','in_progress'))
     order by km limit 8`;

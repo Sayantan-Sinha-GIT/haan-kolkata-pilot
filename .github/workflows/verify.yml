@@ -55,6 +55,13 @@ jobs:
         if: ${{ !inputs.release_apks }}
         working-directory: apps/${{ matrix.app }}
         run: flutter build apk --debug --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.release_apks }}
+        with:
+          name: haan-${{ matrix.app }}-debug-apk
+          path: apps/${{ matrix.app }}/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3
       - name: Prepare release signing
         if: ${{ inputs.release_apks }}
         shell: bash

@@ -1,4 +1,21 @@
 export type Vehicle = 'Bike' | 'Auto' | 'Cab';
+export function validImageBytes(bytes: ArrayBuffer, type: string): boolean {
+  const b = new Uint8Array(bytes);
+  if (b.length < 12) return false;
+  if (type === 'image/jpeg') return b[0] === 0xff && b[1] === 0xd8 && b[b.length-2] === 0xff && b[b.length-1] === 0xd9;
+  if (type === 'image/png') return [137,80,78,71,13,10,26,10].every((v,i) => b[i] === v);
+  if (type === 'image/webp') return String.fromCharCode(...b.slice(0,4)) === 'RIFF' && String.fromCharCode(...b.slice(8,12)) === 'WEBP';
+  return false;
+}
+export function normalizeVehicleNumber(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const plate=value.toUpperCase().replace(/[\s-]/g,'');
+  return /^(?:[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{4}|\d{2}BH\d{4}[A-Z]{1,2})$/.test(plate) ? plate : null;
+}
+export function validFutureDate(value: unknown, today = new Date().toISOString().slice(0,10)): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value && value >= today;
+}
 export type Fare = { base: number; per_km: number; per_min: number; minimum: number };
 export const DEFAULT_FARES: Record<Vehicle, Fare> = {
   Bike: { base: 20, per_km: 6, per_min: 0.5, minimum: 30 },

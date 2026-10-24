@@ -1,5 +1,9 @@
 # Product Requirements Document: Ride-Hailing Platform
 
+## Release update — 25 October 2026
+
+The October release expands the complete trip sequence and rider verification. The requirements below supersede older wording about three-document approval and generic map links. Haan retains its own visual identity while using the familiar request, match, pickup, PIN, trip and receipt sequence.
+
 ## 0. What changed
 
 - **Your tool choices are now the spec:** Flutter (two Android apps), OpenStreetMap + Ola Maps, Neon, Firebase for notifications, Cloudflare hosting, Brevo for login/OTP, Gemini + Groq for the assistant, APKs on your personal Drive. The earlier "no tech stack / Vercel / OpenStreetMap only" lines are replaced by these in section 15.
@@ -61,11 +65,11 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F9 | 4-digit trip PIN | Must | No PIN, no start |
 | F10 | Push notification on every trip change (Firebase) | Must | Works in background |
 | F11 | **AI booking assistant** | Must | Limits in section 10 |
-| F12 | Rider onboarding and documents | Must | Licence, RC, selfie; each under 500 KB |
+| F12 | Rider onboarding and documents | Must | Name, Indian mobile, licence number, vehicle type/plate/make/model/colour/year, licence, RC, selfie, insurance and expiry; Auto/Cab also require permit and expiry. Images under 500 KB |
 | F13 | Rider verification status | Must | Pending / Approved / Rejected with reason |
 | F14 | Rider online/offline, foreground location | Must | Persistent notification while online |
 | F15 | Incoming request screen | Must | Full screen, sound, vibration, 15-s timer |
-| F16 | Rider navigation to pickup and drop | Must | In-app route; "open in maps app" fallback |
+| F16 | Rider navigation to pickup and drop | Must | One-tap Google Maps directions to pickup after acceptance; after customer PIN starts the ride, one-tap Google Maps directions to drop. In-app map remains visible |
 | F17 | Admin login at secret URL | Must | Password + TOTP, 30-min idle timeout |
 | F18 | Rider verification queue | Must | Approve/reject sends push and email |
 | F19 | Users, trips, block, force-cancel, notes | Must | All audit-logged |
@@ -82,16 +86,18 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F30 | Account deletion | Should | Trips anonymised |
 | F31 | Rider's UPI QR at trip end | Nice | Display only |
 | F32 | More Indian languages | Nice | Prompt and string change only |
+| F33 | Pre-boarding identity check | Must | Matched customer sees rider photo, name, rating, vehicle make/model/colour and prominent registration plate, with a reminder to verify the plate |
+| F34 | Pickup instructions and calls | Must | Customer may add a 160-character pickup note; assigned rider sees it and can call customer. Customer can call assigned rider |
 
 ## 6. Main user flows
 
 **6.1 Customer books a ride**
 1. First launch: pick language, enter email, enter OTP, set name.
 2. Home: full-screen map and "Where to?" sheet. Pickup defaults to GPS and is editable.
-3. Search or tap the map. Pick Bike, Auto or Cab; see fare, distance, ETA.
+3. Search or tap the map. Pick Bike, Auto or Cab; see fare, distance, ETA. Optionally add a short pickup instruction.
 4. Tap **Book**; a radar pulse plays while searching.
-5. Rider accepts: name, vehicle number, rating, ETA, PIN, call, cancel.
-6. Track rider to pickup, then to drop. At trip end: fare summary, pay cash or UPI to rider, rate.
+5. Rider accepts: show photo, name, rating, vehicle make/model/colour and large plate, plus call, cancel, live position and the customer-only trip PIN. Ask the customer to verify the plate before boarding.
+6. Track rider to pickup. Rider marks Arrived. Customer gives the 4-digit PIN only when boarding; a valid PIN is required before the server starts the trip. Then track toward drop. At trip end: fare summary, pay cash or UPI to rider, rate.
 7. Trip appears in history with receipt.
 
 **6.2 AI-assisted booking**
@@ -101,9 +107,9 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 4. Only after **Haan** does normal booking (6.1 step 4) begin.
 
 **6.3 Rider completes a trip**
-1. Sign up, fill profile, upload documents. Status: Pending.
+1. Sign up, enter name and mobile, licence number, plate, vehicle make/model/colour/year, document expiry dates and optional UPI ID. Upload licence, RC, selfie and insurance photos; Auto and Cab also upload a commercial permit. Status: Pending. Admin reviews every field and image. Expired documents prevent approval or going online.
 2. After approval: **Go Online**. Offer shows pickup distance, trip distance, fare, 15-s countdown, Accept/Decline.
-3. Navigate to pickup, tap **Arrived**, enter the customer's PIN to **Start**, navigate, **End trip**, collect payment, rate customer.
+3. After acceptance, see customer name, pickup instruction, call button and a direct Google Maps navigation button to the exact pickup coordinate. Tap **Arrived**, ask the boarding customer for their PIN, and enter it to **Start**. Only after start does the direct Google Maps button target the drop coordinate. Tap **End trip**, collect payment, rate customer.
 4. Earnings screen shows the day.
 
 **6.4 Admin support**
@@ -128,6 +134,9 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | Customer cancels after acceptance | Free within 2 min; later only a recorded note |
 | Ola, AI or email quota reached | Friendly message; maps fall back to OpenStreetMap; assistant falls back to manual flow |
 | Rider rejected | Reason shown; can fix and resubmit |
+| Missing or expired insurance/permit | Cannot be approved or go online; upload current documents and resubmit |
+| Wrong vehicle at pickup | Customer sees the plate and identifying details and can cancel or call support before boarding |
+| Driver photo unavailable on weak network | Vehicle details and plate stay visible; the trip continues |
 | App version too old | Blocking update screen with download link |
 
 ## 7. Pages and screens
@@ -146,10 +155,10 @@ Every table: UUID id, created_at, updated_at.
 | Table | Key fields | Rules |
 |---|---|---|
 | users | role, email (unique), phone, name, language, theme, push_token, is_blocked, deleted_at | Phone collected, not verified in v1 |
-| rider_profiles | user, vehicle_type, vehicle_number, document keys, verification_status, rejection_reason, is_online, last location, rating_avg | Only Approved riders go online; documents readable by admins only via short-lived links |
+| rider_profiles | user, vehicle_type/number/make/model/colour/year, licence number, insurance/permit expiry, document keys, verification_status, rejection_reason, is_online, last location, rating_avg | Complete, current documents and approval required to go online; admins see documents via short-lived links; assigned customer can see driver selfie during active trip |
 | otp_codes | email, code_hash, expires_at, attempts, consumed_at | Hashed; deleted after 24 h |
 | sessions | user, refresh_token_hash, device, expires_at, revoked_at | Access 15 min, refresh 30 days, rotated |
-| trips | customer, rider, status, vehicle_type, pickup/drop (lat, lng, text), est and final distance, duration, fare, pin_hash, timestamps, cancelled_by, cancel_reason, via_assistant | Transitions checked server-side only |
+| trips | customer, rider, status, vehicle_type, pickup/drop (lat, lng, text), pickup_note, est and final distance, duration, fare, pin_hash, timestamps, cancelled_by, cancel_reason, via_assistant | Transitions checked server-side only; pickup note at most 160 characters |
 | trip_offers | trip, rider, offered_at, responded_at, response | accepted / declined / timeout |
 | trip_locations | trip, lat, lng, recorded_at | Sampled; purged after 30 days |
 | ratings | trip, from, to, stars, comment | One per direction per trip |
@@ -202,7 +211,8 @@ Hindi, English and Hinglish are required.
 - **Display font** must have real character (never a plain default sans), paired with a clean body font with full Devanagari support. The builder picks exact colours and fonts from the references above.
 - **Dark first**, light mode fully tuned; dark map style in dark mode.
 - A **living background** behind every page (slow city-night map, drifting route lines, soft light trails). No area is just text on a flat colour.
-- **Real pictures on every page:** app screenshots, device mockups, free-licence photos of Indian streets and rides, with credits kept in one file.
+- **Pictures on every page:** app screenshots, device mockups, free-licence photos and original generated editorial imagery of Indian streets and rides, with credits kept in one file.
+- **Ride photography:** the website illustrates pre-boarding plate verification, driver navigation and live-trip sharing with original generated images. Keep images responsive, compressed and described with useful alt text.
 - **Apps:** map-first, bottom sheets with spring physics, marker gliding with heading, route line drawing in, shared-element transitions, press micro-interactions, Lottie for success and empty states. Customer and Rider apps use different accent colours. Touch targets at least 48 dp; strong icons for low-literacy users.
 - **Rider offer screen:** motion must never delay or hide Accept/Decline.
 
@@ -258,6 +268,11 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 12 | Website | No login anywhere; both QR codes open the right Drive download; Lighthouse performance 90+ on mobile |
 | 13 | Visuals | Every page has a living background and real pictures; signature moment and all 5 scroll moments work |
 | 14 | Cost | No service asked for a card or credits |
+| 15 | Pickup navigation | Accepted/arrived rider sees a Google Maps directions URL to the trip's exact pickup coordinates; Bike requests two-wheeler mode |
+| 16 | PIN handoff | Start fails on missing/wrong PIN; the customer sees the PIN, the rider never receives it from the API; drop navigation appears only after start |
+| 17 | Vehicle identity | Matched customer sees name, photo (when available), rating, make/model/colour and plate; unassigned users cannot fetch the selfie |
+| 18 | Rider approval | Missing required profile field, insurance or relevant permit, expired document, or missing mobile blocks approval and online state |
+| 19 | Pickup and calls | Optional pickup note survives booking and reaches the rider; each assigned party can open a phone dialer for the other |
 
 ## 17. Open questions
 

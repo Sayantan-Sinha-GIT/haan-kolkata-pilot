@@ -210,6 +210,18 @@ input[type=range]{width:100%;accent-color:var(--acc);height:36px;background:none
 .street-photo{position:relative;max-width:1360px;margin:0 auto 90px;padding:0 clamp(18px,4vw,56px)}
 .street-photo img{display:block;width:100%;height:clamp(300px,48vw,660px);object-fit:cover;filter:saturate(.75) contrast(1.08);border-radius:18px}
 .street-photo figcaption{position:absolute;left:clamp(36px,6vw,88px);bottom:26px;color:#f4efe4;font:900 clamp(2.5rem,7vw,7rem)/.9 var(--fd);text-transform:uppercase;text-shadow:0 2px 30px #0a0907}
+.moments{padding:clamp(70px,9vw,120px) 0;background:var(--bg2)}
+.moments .lead{margin:18px 0 38px}
+.moment-grid{display:grid;grid-template-columns:1.25fr .75fr;gap:clamp(14px,2vw,26px)}
+.moment-grid figure{position:relative;overflow:hidden;border-radius:18px;margin:0;min-height:330px;background:#201a12}
+.moment-grid figure:first-child{grid-row:span 2;min-height:690px}
+.moment-grid img{display:block;width:100%;height:100%;position:absolute;inset:0;object-fit:cover;transition:transform .8s cubic-bezier(.2,.7,.2,1)}
+.moment-grid figure:hover img{transform:scale(1.035)}
+.moment-grid figure:after{content:"";position:absolute;inset:25% 0 0;background:linear-gradient(transparent,rgba(0,0,0,.72));pointer-events:none}
+.moment-grid figcaption{position:absolute;left:clamp(20px,3vw,40px);right:20px;bottom:clamp(18px,3vw,36px);z-index:1;color:#fff}
+.moment-grid figcaption b{display:block;font:800 clamp(2rem,3vw,3.5rem)/.95 var(--fd);text-transform:uppercase}
+.moment-grid figcaption span{display:block;font:500 14px/1.4 var(--fb);margin-top:8px;max-width:25em}
+@media(max-width:700px){.moment-grid{grid-template-columns:1fr}.moment-grid figure,.moment-grid figure:first-child{grid-row:auto;min-height:420px}.moment-grid figure:nth-child(n+2){min-height:300px}}
 .dl .btn[aria-disabled=true]{opacity:.6;cursor:not-allowed}
 .qr:has(.qr-wait){display:grid;place-items:center}.qr-wait{color:#17140d;font:600 13px/1.4 var(--fb);padding:12px}
 </style>
@@ -381,13 +393,23 @@ input[type=range]{width:100%;accent-color:var(--acc);height:36px;background:none
 <svg class="scn" viewBox="0 0 1200 220" preserveAspectRatio="xMidYMax slice" aria-hidden="true"><use href="#bridge"/><use href="#taxi" class="tx" style="animation-delay:-4s"/></svg>
 </section>
 
+<section class="moments" aria-labelledby="moments-title"><div class="wrap">
+<p class="kick" data-hi="सफ़र के हर पड़ाव पर">At every step of the ride</p>
+<h2 id="moments-title" data-hi="निश्चिंत होकर <em>चलें।</em>">Know your ride.<br><em>Go with ease.</em></h2>
+<p class="lead" data-hi="बुकिंग से लेकर पिकअप और ड्रॉप तक, ज़रूरी जानकारी सही समय पर।">The right details at the right moment, from booking to pickup and drop.</p>
+<div class="moment-grid">
+<figure><img src="photos/verify-the-ride.webp" alt="Passenger checking a Kolkata cab's number plate while the driver waits" loading="lazy" width="1200" height="1800"><figcaption><b data-hi="पहले नंबर प्लेट जाँचें।">Check the plate first.</b><span data-hi="ड्राइवर की फ़ोटो, नाम, गाड़ी का मॉडल, रंग और नंबर ऐप में देखें।">See the driver's photo, name, vehicle model, colour and plate in the app.</span></figcaption></figure>
+<figure><img src="photos/kolkata-auto-driver.webp" alt="Kolkata auto driver ready to navigate to a pickup" loading="lazy" width="1200" height="800"><figcaption><b data-hi="सीधा रास्ता।">One tap to navigate.</b><span data-hi="पिकअप, फिर ग्राहक के PIN के बाद ड्रॉप तक Google Maps।">Google Maps to pickup, then to drop after the customer's PIN.</span></figcaption></figure>
+<figure><img src="photos/share-the-trip.webp" alt="Passenger sharing a live trip from inside an auto" loading="lazy" width="1200" height="800"><figcaption><b data-hi="सफ़र साझा करें।">Keep someone close.</b><span data-hi="अपना लाइव ट्रिप लिंक आपातकालीन संपर्क को भेजें।">Share your live trip link with an emergency contact.</span></figcaption></figure>
+</div></div></section>
+
 <section class="rds" id="riders"><div class="rdp"><div class="lt"></div><div class="lt b"></div>
 <div class="wrap rdg">
 <div><p class="kick" data-hi="07 · राइडरों के लिए">07 · For riders</p>
 <h2 class="sp" data-hi="ऑनलाइन आइए।<br>स्वीकारिए। <em>चलाइए।</em>">Go online.<br>Accept. <em>Drive.</em></h2>
 <p class="lead" data-hi="सस्ते फ़ोन और कमज़ोर नेटवर्क के लिए हल्का Rider ऐप। यह बैकग्राउंड में चलता रहता है और Accept के बीच कोई एनिमेशन नहीं आने देता।">A light Rider app for budget phones and weak networks. It survives in the background and never lets motion get between you and Accept.</p>
 <div style="margin-top:34px">
-<div class="df"><b data-hi="दस्तावेज़">Documents</b><p data-hi="लाइसेंस, RC और सेल्फ़ी, हर एक 500 KB से कम। एडमिन जाँचते हैं; आपको Pending, Approved या कारण के साथ Rejected दिखता है, और आप सुधारकर दोबारा भेज सकते हैं।">Licence, RC and a selfie, each under 500 KB. Admins review them; you see Pending, Approved, or Rejected with the reason, and can fix and resubmit.</p></div>
+<div class="df"><b data-hi="दस्तावेज़">Documents</b><p data-hi="नाम, मोबाइल, गाड़ी की पूरी जानकारी, लाइसेंस, RC, सेल्फ़ी और बीमा दें। ऑटो और कैब के लिए परमिट भी दें। एडमिन की मंज़ूरी के बाद ही ऑनलाइन जा सकते हैं।">Add your name, mobile, vehicle details, licence, RC, selfie and insurance. Auto and Cab also require a permit. Go online after admin approval.</p></div>
 <div class="df"><b data-hi="ऑफ़र">Offers</b><p data-hi="फ़ुल स्क्रीन, आवाज़ और वाइब्रेशन के साथ, बैकग्राउंड में भी। पिकअप की दूरी, सफ़र की दूरी, किराया और 15 सेकंड का टाइमर। कई राइडर एक साथ स्वीकारें तो ट्रिप ठीक एक को मिलता है।">Full screen, with sound and vibration, even from the background. Pickup distance, trip distance, fare and a 15-second timer. If several riders accept at once, exactly one gets the trip.</p></div>
 <div class="df"><b data-hi="लो-डेटा मोड">Low-data mode</b><p data-hi="चलते समय हर 5 सेकंड, रुके हों तो हर 15 सेकंड में लोकेशन, कमज़ोर नेटवर्क पर बैच में।">Location every 5 seconds when moving, every 15 when idle, batched on a poor network.</p></div>
 <div class="df"><b data-hi="कमाई">Earnings</b><p data-hi="आज, इस हफ़्ते, और नकद वसूली।">Today, this week, and cash collected.</p></div>

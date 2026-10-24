@@ -44,6 +44,21 @@ class HaanApi {
   Future<dynamic> patch(String path, Object body) => _send('PATCH', path, body: body);
   Future<dynamic> delete(String path) => _send('DELETE', path);
   Future<dynamic> uploadBytes(String path, List<int> bytes, String contentType) => _send('POST', path, bytes: bytes, contentType: contentType);
+  Future<List<int>> getBytes(String path, {bool retried = false}) async {
+    if (apiBaseUrl.isEmpty) throw const ApiException('The service address has not been configured.', 'not_configured', 0);
+    final response = await _client.get(Uri.parse('$apiBaseUrl$path'), headers: {
+      if (_access != null) 'Authorization': 'Bearer $_access',
+    }).timeout(const Duration(seconds: 20));
+    if (response.statusCode == 401 && !retried && _refresh != null) {
+      final renewed = await _send('POST','/v1/auth/refresh',body:{'refresh_token':_refresh,'device':'Android'},retried:true);
+      await saveTokens(Map<String,dynamic>.from(renewed));
+      return getBytes(path,retried:true);
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('Photo unavailable. Check your connection.', 'photo_unavailable', response.statusCode);
+    }
+    return response.bodyBytes;
+  }
   Future<String> transcribeAudio(String filePath) async {
     if (apiBaseUrl.isEmpty) throw const ApiException('The service address has not been configured.', 'not_configured', 0);
     final file = File(filePath);

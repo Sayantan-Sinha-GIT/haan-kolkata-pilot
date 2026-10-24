@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fare, haversineKm, scrubAssistantText, validCoordinates, validPoint } from './rules';
+import { fare, haversineKm, normalizeVehicleNumber, scrubAssistantText, validCoordinates, validFutureDate, validImageBytes, validPoint } from './rules';
 import { decryptTotp, encryptTotp, hmac, totp, totpSetupKey } from './crypto';
 
 describe('non-negotiable trip rules',()=>{
@@ -23,6 +23,20 @@ describe('non-negotiable trip rules',()=>{
   });
   it('scrubs phone and email before AI receives a phrase',()=>{
     expect(scrubAssistantText('Call 9876543210 or x@y.com for Sealdah')).toBe('Call [phone] or [email] for Sealdah');
+  });
+  it('normalizes Indian plates and rejects malformed registration details',()=>{
+    expect(normalizeVehicleNumber('wb 12 ab 1234')).toBe('WB12AB1234');
+    expect(normalizeVehicleNumber('24 BH 1234 AA')).toBe('24BH1234AA');
+    expect(normalizeVehicleNumber('not-a-plate')).toBeNull();
+    expect(validFutureDate('2027-01-31','2026-10-25')).toBe(true);
+    expect(validFutureDate('2026-02-30','2026-10-25')).toBe(false);
+    expect(validFutureDate('2025-01-01','2026-10-25')).toBe(false);
+  });
+  it('rejects a document whose claimed image type does not match its bytes',()=>{
+    const jpeg=Uint8Array.from([0xff,0xd8,1,2,3,4,5,6,7,8,0xff,0xd9]).buffer;
+    expect(validImageBytes(jpeg,'image/jpeg')).toBe(true);
+    expect(validImageBytes(jpeg,'image/png')).toBe(false);
+    expect(validImageBytes(new TextEncoder().encode('not a real jpeg').buffer,'image/jpeg')).toBe(false);
   });
 });
 

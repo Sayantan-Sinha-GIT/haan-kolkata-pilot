@@ -1,7 +1,7 @@
 name: haan_rider
 description: Haan rider Android app.
 publish_to: none
-version: 1.0.2+3
+version: 1.0.3+4
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:
