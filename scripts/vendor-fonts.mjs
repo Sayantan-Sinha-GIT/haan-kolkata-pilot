@@ -20,7 +20,10 @@ for(const [,subsetRaw,block] of blocks){
   const filename=`${family.toLowerCase().replace(/\s+/g,'-')}-${subset}-${weight}-${style}.woff2`;
   const asset=await fetch(remote);if(!asset.ok)throw new Error(`Font asset HTTP ${asset.status}`);
   const data=Buffer.from(await asset.arrayBuffer());writeFileSync(join(dir,filename),data);bytes+=data.length;count++;
-  selected.push(`/* ${subset} */\n${block.replace(remote,`fonts/${filename}`)}`);
+  // The rupee sign appears on the English page. Keep it on a system fallback
+  // instead of fetching several large Devanagari subsets just for one glyph.
+  const scoped=subset==='devanagari'?block.replace(', U+20B9',''):block;
+  selected.push(`/* ${subset} */\n${scoped.replace(remote,`fonts/${filename}`)}`);
 }
 if(count!==12)throw new Error(`Expected 12 font subsets, got ${count}`);
 writeFileSync(join(root,'fonts.css'),selected.join('\n\n')+'\n');
@@ -29,6 +32,6 @@ for(const [family,path] of Object.entries({
 })){
   const license=await fetch(`https://raw.githubusercontent.com/google/fonts/main/ofl/${path}/OFL.txt`);
   if(!license.ok)throw new Error(`${family} font license HTTP ${license.status}`);
-  writeFileSync(join(dir,`${family}-OFL.txt`),await license.text());
+  writeFileSync(join(dir,`${family}-OFL.txt`),(await license.text()).replace(/[\t ]+$/gm,''));
 }
 console.log(`Vendored ${count} WOFF2 subsets (${bytes} bytes) with four OFL licenses.`);
