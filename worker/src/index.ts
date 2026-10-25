@@ -53,8 +53,7 @@ async function issueTokens(env: Env, user: Principal, device: string) {
 async function promotionForFare(env:Env,code:string|null,riderFare:number){
   if(!code)return {promotion:null,discount:0};
   const [promotion]=await db(env)`select p.id,p.code,p.title,p.discount_type,p.amount,p.max_discount,p.max_redemptions,
-    (select count(*)::int from promo_redemptions pr join trips t on t.id=pr.trip_id
-      where pr.promotion_id=p.id and t.status not in ('cancelled','no_riders_found')) as used
+    p.claimed_count as used
     from promotions p where p.code=${code} and p.active and p.starts_at<=now() and p.ends_at>now()`;
   if(!promotion||Number(promotion.used)>=Number(promotion.max_redemptions))return null;
   return {promotion,discount:promotionDiscount(riderFare,promotion.discount_type,Number(promotion.amount),Number(promotion.max_discount))};
@@ -223,13 +222,32 @@ api.post('/v1/trips', async c => {
   if(!promotion)return error('Promotion is unavailable or has expired.','invalid_promotion',409);
   const pin=randomDigits(4),pinHash=await hmac(c.env.SESSION_SECRET,pin);
   try {
-    const [trip]=await sql`insert into trips(customer_id,vehicle_type,pickup_lat,pickup_lng,pickup_text,pickup_note,drop_lat,drop_lng,drop_text,estimated_km,estimated_min,estimate_rupees,pin_hash,via_assistant,
-      service_mode,stops,guest_name,guest_phone,promotion_id,promo_discount_rupees,customer_estimate_rupees)
-      values(${user.id}::uuid,${options.vehicle}::vehicle_type,${options.pickup.lat},${options.pickup.lng},${options.pickup.text.trim()},${(input.pickup_note as string|undefined)?.trim()||null},${options.drop.lat},${options.drop.lng},${options.drop.text.trim()},${km},${minutes},${amount},${pinHash},${!!input.via_assistant},
-      ${options.mode},${JSON.stringify(options.stops)}::jsonb,${options.guestName},${options.guestPhone},${promotion.promotion?.id||null}::uuid,${promotion.discount},${amount-promotion.discount})
-      returning id,status,estimate_rupees,customer_estimate_rupees,promo_discount_rupees,estimated_km,estimated_min`;
-    if(promotion.promotion&&promotion.discount>0)await sql`insert into promo_redemptions(promotion_id,trip_id,discount_rupees)
-      values(${promotion.promotion.id}::uuid,${trip.id}::uuid,${promotion.discount})`;
+    const promotionId=promotion.promotion?.id||null;
+    const [trip]=await sql`with claim as (
+      update promotions set claimed_count=claimed_count+1
+      where id=${promotionId}::uuid and active and starts_at<=now() and ends_at>now()
+        and claimed_count<max_redemptions returning id
+    ), eligible as (
+      select id from claim union all select null::uuid where ${promotionId===null}
+    ), new_trip as (
+      insert into trips(customer_id,vehicle_type,pickup_lat,pickup_lng,pickup_text,pickup_note,
+        drop_lat,drop_lng,drop_text,estimated_km,estimated_min,estimate_rupees,pin_hash,via_assistant,
+        service_mode,stops,guest_name,guest_phone,promotion_id,promo_discount_rupees,customer_estimate_rupees)
+      select ${user.id}::uuid,${options.vehicle}::vehicle_type,${options.pickup.lat},${options.pickup.lng},
+        ${options.pickup.text.trim()},${(input.pickup_note as string|undefined)?.trim()||null},
+        ${options.drop.lat},${options.drop.lng},${options.drop.text.trim()},${km},${minutes},
+        ${amount},${pinHash},${!!input.via_assistant},${options.mode},${JSON.stringify(options.stops)}::jsonb,
+        ${options.guestName},${options.guestPhone},eligible.id,${promotion.discount},
+        ${amount-promotion.discount} from eligible
+      returning id,status,estimate_rupees,customer_estimate_rupees,promo_discount_rupees,
+        estimated_km,estimated_min,promotion_id
+    ), redemption as (
+      insert into promo_redemptions(promotion_id,trip_id,discount_rupees)
+      select new_trip.promotion_id,new_trip.id,${promotion.discount} from new_trip
+      where new_trip.promotion_id is not null returning id
+    ) select id,status,estimate_rupees,customer_estimate_rupees,promo_discount_rupees,
+        estimated_km,estimated_min from new_trip`;
+    if(!trip)return error('Promotion is unavailable or has reached its limit.','invalid_promotion',409);
     await advanceMatch(c.env,trip.id);
     const room=c.env.TRIP_ROOM.get(c.env.TRIP_ROOM.idFromName(trip.id));
     await room.fetch('https://room.internal/schedule',{method:'POST',body:JSON.stringify({tripId:trip.id})});
@@ -963,9 +981,7 @@ api.patch('/v1/admin/fares/:vehicle',async c=>{
 api.get('/v1/admin/promotions',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
   const promotions=await db(c.env)`select p.id,p.code,p.title,p.discount_type,p.amount,p.max_discount,p.max_redemptions,
-    p.starts_at,p.ends_at,p.active,p.created_at,
-    (select count(*)::int from promo_redemptions pr join trips t on t.id=pr.trip_id
-      where pr.promotion_id=p.id and t.status not in ('cancelled','no_riders_found')) as redemptions
+    p.starts_at,p.ends_at,p.active,p.created_at,p.claimed_count as redemptions
     from promotions p order by p.created_at desc limit 100`;
   return c.json({promotions});
 });

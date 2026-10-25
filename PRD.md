@@ -102,7 +102,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F42 | Cab shared preview | Should | Visible, bookable Cab option with clear notice that no co-rider matching or shared discount is active |
 | F43 | One-way intercity Cab preview | Should | 20–500 km direct distance; current Cab distance fare only; tolls, permits and return charges excluded and labelled |
 | F44 | Rider destination filter | Should | Rider can choose or clear a destination; matching only offers trips that move at least 0.5 km or 2% of remaining distance toward it |
-| F45 | Operator promotions | Should | Super admin sets code, time window, cap, redemption limit and active state; customer sees discount; rider sees full fare; admin tracks and manually settles subsidy |
+| F45 | Operator promotions | Should | Super admin sets code, time window, cap, redemption limit and active state; atomic booking claim prevents overuse; cancelled/unmatched trips release a claim; customer sees discount; rider sees full fare; admin tracks and manually settles subsidy |
 | F46 | Rider self-cancel quota | Must | Three assigned-trip self-cancellations per Asia/Kolkata calendar day; fourth blocked; no-show and customer/admin cancellation do not consume the quota |
 | F47 | Admin case triage | Must | Support priority, category, assigned agent, status, resolution, reply and notes; super admin also manages promotions, subsidies, users, riders, trips, scheduled rides, fares and audit |
 
@@ -219,6 +219,7 @@ Every table: UUID id, created_at, updated_at.
 13. **Rider cancellations:** count assigned-trip self-cancels by Asia/Kolkata day; allow three, block the fourth; no-show and customer/admin cancellations do not count.
 14. **Route order:** the pickup remains the target until the customer PIN starts the ride. Then Google Maps targets each unvisited stop in order, finally the drop.
 15. **Preview honesty:** shared mode has no passenger pooling; intercity uses a one-way estimate; scheduled requests have no driver guarantee. State these before booking.
+16. **Promotion capacity:** quote checks the available cap; booking reserves one use atomically with trip creation and redemption. A cancelled or unmatched trip releases its use. Manual subsidy settlement is allowed only after completion.
 
 ## 10. AI features
 
@@ -317,7 +318,7 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 26 | Scheduled request | Customer can hold/cancel three; due cron creates a matchable trip ten minutes early; admin can view/cancel pending |
 | 27 | Preview modes | Shared and intercity Cab options appear with their operational and pricing limits stated before confirmation |
 | 28 | Destination filter | Rider can set/clear; matching excludes trips that do not move toward the chosen destination |
-| 29 | Promotion | Admin can create/activate/deactivate; booking reapplies cap/window; customer due and rider fare differ by the discount; subsidy ledger records manual settlement |
+| 29 | Promotion | Admin can create/activate/deactivate; simultaneous bookings cannot exceed the cap; cancellation releases capacity; customer due and rider fare differ by the discount; subsidy ledger records manual settlement |
 | 30 | Self-cancel quota | Three rider self-cancels succeed in a Kolkata day, fourth fails; remaining count is shown; no-show does not count |
 | 31 | Support triage | Agent can set priority, category, owner, status and resolution; replies and all changes are auditable |
 

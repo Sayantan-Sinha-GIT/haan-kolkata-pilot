@@ -241,3 +241,20 @@ alter table tickets add column if not exists category text not null default 'gen
   check (category in ('general','safety','payment','driver','trip','account'));
 alter table tickets add column if not exists assigned_to uuid references users(id);
 alter table tickets add column if not exists resolution text;
+
+-- Atomic promotion capacity and release when a trip never completes.
+alter table promotions add column if not exists claimed_count integer not null default 0
+  check (claimed_count >= 0);
+create or replace function release_promo_claim() returns trigger language plpgsql as $$
+begin
+  if old.promotion_id is not null and old.status not in ('cancelled','no_riders_found')
+    and new.status in ('cancelled','no_riders_found') then
+    update promotions set claimed_count=greatest(0,claimed_count-1)
+      where id=old.promotion_id;
+  end if;
+  return new;
+end
+$$;
+drop trigger if exists trip_release_promo_claim on trips;
+create trigger trip_release_promo_claim after update of status on trips
+  for each row execute function release_promo_claim();

@@ -69,4 +69,3 @@ alter table tickets add column if not exists category text not null default 'gen
   check (category in ('general','safety','payment','driver','trip','account'));
 alter table tickets add column if not exists assigned_to uuid references users(id);
 alter table tickets add column if not exists resolution text;
-
