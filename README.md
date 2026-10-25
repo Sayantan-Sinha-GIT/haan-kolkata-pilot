@@ -1,8 +1,9 @@
 # Haan · Kolkata pilot
 
-Haan is a ride booking pilot with a public website, two Flutter Android apps, a private operations console, and a Cloudflare Worker API. The customer confirms a fare before booking and can add a pickup note. An approved driver accepts one timed offer, opens Google Maps directions to the pickup, arrives, asks the boarding customer for a four-digit PIN, then opens Google Maps directions to the drop. Both apps show the live trip; the customer sees the driver's photo, vehicle details, plate and call button. The driver completes the trip and receives cash or direct UPI. The product does not process payments.
+Haan is a ride booking pilot with a public website, two Flutter Android apps, a private operations console, and a Cloudflare Worker API. The customer confirms a fare before booking and can add a pickup note. An approved driver accepts one timed offer, opens Google Maps directions to the pickup, arrives, asks the boarding customer for a four-digit PIN, then opens Google Maps directions to the drop. Both apps show the live trip; the customer sees the driver's photo, vehicle details, plate and call button. Both parties can share the live trip, call 112, and reach support. The driver can mark a no-show five minutes after arrival. At trip end, the customer can pay cash or scan the driver's direct UPI QR when a valid handle is registered. The product does not process or verify payments.
 
 The site and apps are **pilot software**. Real commercial operation needs local licensing, insurance, and legal review first.
+The pilot covers the core request-to-receipt journey; [PRD.md](PRD.md) lists the supported features and the larger-platform features outside this release.
 
 ## Workspace
 
@@ -16,7 +17,7 @@ The site and apps are **pilot software**. Real commercial operation needs local 
 
 ## Current infrastructure
 
-The [public site](https://haan-kolkata-pilot.pages.dev/) and [Worker API](https://haan-api.srimantasutapa123.workers.dev/health) are deployed. The `haan-kolkata-pilot` Neon project has `production` and `development` branches; both include the vehicle-verification migration. The owner super admin is provisioned; credentials remain in ignored `secrets/admin-onboarding.txt`. Signed v1.0.3 APKs are built in CI, with Pages hosting verified APKs while the owner prepares Drive links. Driver registration requires a plate, make/model/color/year, licence number, expiry dates and document uploads; changing a plate or licence requires renewed review. Brevo, Ola Maps, Gemini, Groq and Firebase credentials are configured on the Worker. Real two-device notification delivery still needs a physical-device check before inviting pilot users. See [PROGRESS.md](PROGRESS.md) for current test results.
+The [public site](https://haan-kolkata-pilot.pages.dev/) and [Worker API](https://haan-api.srimantasutapa123.workers.dev/health) are deployed. The `haan-kolkata-pilot` Neon project has `production` and `development` branches; both include the vehicle-verification migration. The owner super admin is provisioned; credentials remain in ignored `secrets/admin-onboarding.txt`. Signed v1.0.4 APKs are built in CI, with Pages hosting verified APKs while the owner prepares Drive links. Driver registration requires a plate, make/model/color/year, licence number, expiry dates and document uploads; changing a plate or licence requires renewed review. Brevo, Ola Maps, Gemini, Groq and Firebase credentials are configured on the Worker. Real two-device notification delivery still needs a physical-device check before inviting pilot users. See [PROGRESS.md](PROGRESS.md) for current test results.
 
 ## Local checks
 
