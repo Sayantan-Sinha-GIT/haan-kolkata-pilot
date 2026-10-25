@@ -79,7 +79,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F19 | Users, trips, block, force-cancel, notes | Must | All audit-logged |
 | F20 | Support tickets | Must | Open / In progress / Resolved |
 | F21 | Website: landing, downloads with QR, install guide EN/HI, privacy, terms, contact | Must | No login; admin never linked |
-| F22 | Trip history and receipts | Should | Cached offline |
+| F22 | Trip history and receipts | Should | Completed rides show exact customer due and rider earnings; cancelled/unmatched rides show no charge, payment QR or rating; support stays available; cached offline |
 | F23 | Ratings both ways | Should | 1-5 stars, optional comment |
 | F24 | SOS: share live trip link, 112 shortcut | Should | Prompts for emergency contact if missing |
 | F25 | Rider earnings summary | Should | Kolkata-calendar-day/week rider earnings after Haan's fee, today's Haan fee, and separate pending amounts owed to and from Haan; cancelled trips show no earnings; never imply cash or UPI was received without external confirmation |

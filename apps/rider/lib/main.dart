@@ -1054,7 +1054,8 @@ class _RiderReceiptState extends State<RiderReceipt> {
       body: trip == null
           ? const Center(child: CircularProgressIndicator())
           : ListView(padding: const EdgeInsets.all(22), children: [
-              HaanHeading(app.tr('completed'), accent: mint),
+              HaanHeading(trip!['status']=='completed' ? app.tr('completed')
+                  : '${app.tr('status')}: ${trip!['status']}', accent: mint),
               const SizedBox(height: 20),
               Card(
                   child: Padding(
@@ -1064,22 +1065,27 @@ class _RiderReceiptState extends State<RiderReceipt> {
                           children: [
                             Text(
                                 '${trip!['pickup_text']} → ${trip!['drop_text']}'),
-                            Text(
-                                '₹${trip!['customer_final_rupees'] ?? trip!['customer_estimate_rupees'] ?? trip!['final_rupees'] ?? trip!['estimate_rupees']}',
-                                style:
-                                    Theme.of(context).textTheme.displayMedium),
-                            Text(app.language=='hi'?'ग्राहक से लें':'Collect from customer'),
-                            Text(app.language=='hi'
+                            if(trip!['status']=='completed') Text(
+                                '₹${trip!['customer_final_rupees'] ?? trip!['final_rupees']}',
+                                style:Theme.of(context).textTheme.displayMedium),
+                            if(trip!['status']=='completed') Text(app.language=='hi'?'ग्राहक से लें':'Collect from customer'),
+                            if(trip!['status']=='completed') Text(app.language=='hi'
                               ? 'आपकी कमाई ₹${trip!['rider_earnings_rupees'] ?? '—'} · Haan शुल्क ₹${trip!['platform_fee_rupees'] ?? '—'}'
                               : 'Your earnings ₹${trip!['rider_earnings_rupees'] ?? '—'} · Haan fee ₹${trip!['platform_fee_rupees'] ?? '—'}'),
-                            if((trip!['promotion_topup_rupees'] as num?)?.toInt()!=0)
+                            if(trip!['status']=='completed'&&(trip!['promotion_topup_rupees'] as num?)?.toInt()!=0)
                               Text('₹${trip!['promotion_topup_rupees']} ${app.language=='hi'?'प्रोमो टॉप-अप — ऑपरेटर से अलग':'promotion top-up — settle separately with operator'}'),
-                            Text(app.language=='hi'
+                            if(trip!['status']=='completed') Text(app.language=='hi'
                               ? 'Haan सेटलमेंट ₹${trip!['net_due_to_platform_rupees'] ?? '—'} (धनात्मक: Haan को दें)'
                               : 'Net settlement ₹${trip!['net_due_to_platform_rupees'] ?? '—'} (positive: remit to Haan)'),
+                            if(trip!['status']=='completed') Text(app.language=='hi'
+                              ? 'सेटलमेंट: ${trip!['settlement_status'] ?? 'pending'}'
+                              : 'Settlement: ${trip!['settlement_status'] ?? 'pending'}'),
+                            if(trip!['status']!='completed') Text(app.language=='hi'
+                              ? 'यह सफ़र पूरा नहीं हुआ। कोई कमाई या वसूली नहीं दिखा रहे हैं।'
+                              : 'This trip was not completed. No earnings or amount to collect.'),
                           ]))),
               const SizedBox(height:16),
-              Builder(builder:(context){
+              if(trip!['status']=='completed') Builder(builder:(context){
                 final amount=(trip!['customer_final_rupees'] as num?)?.toInt()
                   ??(trip!['customer_estimate_rupees'] as num?)?.toInt()
                   ??(trip!['final_rupees'] as num?)?.toInt()
@@ -1103,8 +1109,8 @@ class _RiderReceiptState extends State<RiderReceipt> {
                       : 'Check your own UPI app for payment. Haan cannot confirm it.'),
                   ])));
               }),
-              Text(app.tr('rate')),
-              Row(
+              if(trip!['status']=='completed') Text(app.tr('rate')),
+              if(trip!['status']=='completed') Row(
                   children: List.generate(
                       5,
                       (i) => IconButton(

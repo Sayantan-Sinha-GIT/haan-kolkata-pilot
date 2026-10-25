@@ -1259,7 +1259,8 @@ class _ReceiptPageState extends State<ReceiptPage> {
       body: trip == null
           ? Center(child: Text(error ?? '…'))
           : ListView(padding: const EdgeInsets.all(24), children: [
-              HaanHeading(app.tr('completed')),
+              HaanHeading(trip!['status']=='completed' ? app.tr('completed')
+                  : '${app.tr('status')}: ${trip!['status']}'),
               const SizedBox(height: 20),
               Card(
                   child: Padding(
@@ -1273,18 +1274,21 @@ class _ReceiptPageState extends State<ReceiptPage> {
                             const Divider(),
                             Text(
                                 '${trip!['vehicle_type']} · ${trip!['completed_at'] ?? trip!['created_at']}'),
-                            Text(
-                                '₹${trip!['customer_final_rupees'] ?? trip!['customer_estimate_rupees'] ?? trip!['final_rupees'] ?? trip!['estimate_rupees']}',
-                                style:
-                                    Theme.of(context).textTheme.displaySmall),
-                            Text(app.tr('payDirect'))
+                            if(trip!['status']=='completed') Text(
+                                '₹${trip!['customer_final_rupees'] ?? trip!['final_rupees']}',
+                                style:Theme.of(context).textTheme.displaySmall),
+                            if(trip!['status']=='completed') Text(app.tr('payDirect')),
+                            if(trip!['status']!='completed') Text(
+                                trip!['status']=='cancelled'||trip!['status']=='no_riders_found'
+                                  ? (app.language=='hi'?'कोई किराया देय नहीं है।':'No fare is due.')
+                                  : (app.language=='hi'?'अनुमानित किराया ₹${trip!['customer_estimate_rupees'] ?? trip!['estimate_rupees']}':'Estimated fare ₹${trip!['customer_estimate_rupees'] ?? trip!['estimate_rupees']}'))
                           ]))),
               const SizedBox(height: 20),
-              if((trip!['promo_discount_rupees'] as num?)?.toInt()!=0)
+              if(trip!['status']=='completed'&&(trip!['promo_discount_rupees'] as num?)?.toInt()!=0)
                 Text(app.language=='hi'
                   ? 'प्रोमो छूट ₹${trip!['promo_discount_rupees']}। Haan ड्राइवर की कमाई अलग से समायोजित करेगा; ऐप भुगतान की पुष्टि नहीं करता।'
                   : 'Promotion discount ₹${trip!['promo_discount_rupees']}. Haan adjusts the rider’s earnings separately; the app cannot verify payment.'),
-              Builder(builder:(context){
+              if(trip!['status']=='completed') Builder(builder:(context){
                 final amount=(trip!['customer_final_rupees'] as num?)?.toInt()
                   ??(trip!['customer_estimate_rupees'] as num?)?.toInt()
                   ??(trip!['final_rupees'] as num?)?.toInt()
@@ -1318,8 +1322,8 @@ class _ReceiptPageState extends State<ReceiptPage> {
                   ])));
               }),
               const SizedBox(height: 20),
-              Text(app.tr('rate')),
-              Row(
+              if(trip!['status']=='completed') Text(app.tr('rate')),
+              if(trip!['status']=='completed') Row(
                   children: List.generate(
                       5,
                       (i) => IconButton(

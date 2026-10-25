@@ -59,6 +59,8 @@ try {
   assert('admin audit login',await request('/v1/admin/audit','GET',undefined,adminLogin.access_token),200,data=>data.entries.some(x=>x.action==='login'&&x.admin_email===superAdmin.email));
   const supportLogin=assert('support TOTP login',await request('/v1/admin/login','POST',{email:support.email,password:support.password,totp:support.code},undefined,'198.51.100.14'),200);
   assert('support fare edit denied',await request('/v1/admin/fares/Bike','PATCH',{base:20,per_km:6,per_min:0.5,minimum:30,reason:'QA'},supportLogin.access_token),403);
+  assert('support cannot settle rider balances',await request('/v1/admin/settlements/00000000-0000-0000-0000-000000000000/settle','POST',
+    {reason:'QA'},supportLogin.access_token),403);
   assert('support audit denied',await request('/v1/admin/audit','GET',undefined,supportLogin.access_token),403);
   console.log(`PASS ${checks} development auth/admin checks`);
 } finally {
