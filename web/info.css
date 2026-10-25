@@ -20,3 +20,4 @@ h1,h2{font-family:'Big Shoulders Display',Hind,sans-serif;line-height:.9;text-tr
 footer{position:relative;z-index:1;border-top:1px solid var(--line);padding:28px clamp(18px,4vw,56px);display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;color:var(--mut);font-size:14px}footer nav{display:flex;gap:18px;flex-wrap:wrap}footer a:hover{color:var(--fg)}
 @media(max-width:700px){.intro{grid-template-columns:1fr}.controls a{display:none}.photo{margin:32px 0 45px}}
 @media(max-width:560px){.app-shots{grid-template-columns:minmax(0,320px)}}
+@media(max-width:350px){h1{font-size:4rem}h2{font-size:2rem}}
