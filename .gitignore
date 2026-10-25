@@ -16,6 +16,7 @@ android/key.properties
 *.jks
 *.keystore
 web/downloads/
+/*.apk
 .idea/
 *.iml
 
