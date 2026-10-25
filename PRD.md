@@ -4,6 +4,8 @@
 
 The October release expands the complete trip sequence and rider verification. The requirements below supersede older wording about three-document approval and generic map links. Haan retains its own visual identity while using the familiar request, match, pickup, PIN, trip and receipt sequence. The follow-up adds an arrival clock, a five-minute no-show action, direct UPI QR handoff, and safety controls for both participants.
 
+**Feature expansion, 25 October:** The user explicitly chose feature breadth for this prototype. Add scheduled requests, up to two intermediate stops, booking for another person, a Cab shared-ride preview, one-way intercity Cab preview, a rider destination filter, operator promotions, a three-per-day rider self-cancellation limit, and case triage in the secure admin. These requirements replace the narrower feature-parity boundary below. A preview mode is labelled honestly where real pooling, route pricing, or external operations are not implemented.
+
 ## 0. What changed
 
 - **Your tool choices are now the spec:** Flutter (two Android apps), OpenStreetMap + Ola Maps, Neon, Firebase for notifications, Cloudflare hosting, Brevo for login/OTP, Gemini + Groq for the assistant, APKs on your personal Drive. The earlier "no tech stack / Vercel / OpenStreetMap only" lines are replaced by these in section 15.
@@ -48,9 +50,9 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 
 **Goals:** book in under 60 seconds (or by Hindi voice with confirmation); cinematic, map-first UI that stays usable for low-literacy users; dark and light modes; English and Hindi; everything on free tiers; buildable end to end by one builder from this document.
 
-**Non-goals (v1):** Play Store or App Store release, iOS; in-app payment gateway; logins on the website; surge pricing, pooling, scheduled rides, parcels; in-app chat or masked calling (phone dialer instead); languages beyond Hindi and English.
+**Non-goals (v1):** Play Store or App Store release, iOS; in-app payment gateway and automatic payment verification; public website accounts; parcels; in-app chat or masked calling (phone dialer instead); languages beyond Hindi and English. Shared ride co-passenger matching, guaranteed scheduled pickup, full intercity toll/return pricing, and automated operator-to-rider subsidy payout are later operational work; their prototype surfaces state these limits.
 
-**Feature-parity boundary:** “Uber/Rapido-style” describes the core trip journey, not every feature of those large platforms. This pilot does not offer scheduled trips, extra stops, booking for another person, pooled/intercity services, masked numbers, a payment processor, automatic payment verification, driver destination filters, promotions, or 24/7 staffed safety response. These require new operations, provider contracts, fare rules and field testing before being promised to customers. The supported pilot flow is defined below and must be truthful in the apps and website.
+**Feature-parity boundary:** “Uber/Rapido-style” covers the request, match, pickup, plate check, PIN, navigation, stops, drop, receipt and support journey plus the prototype options named above. The Cab shared option books one Cab and does not find a co-passenger. Intercity is a one-way Cab estimate using the current distance fare, excluding tolls, permits and return charges. Scheduled rides enter normal matching ten minutes before pickup and do not reserve a driver. Promotions reduce the customer's amount due while leaving the rider fare intact; the operator must manually settle the difference outside Haan. The app must state these limits before confirmation.
 
 ## 5. Features
 
@@ -94,16 +96,25 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F36 | Two-sided trip safety | Must | Customer and rider can call 112, share a six-hour signed live trip link, and reach trip support during the active trip |
 | F37 | Direct UPI validation | Must | Driver may register a valid UPI ID without redoing vehicle review; completed-trip QR and deep link contain exact fare; handle is hidden during active trips |
 | F38 | Boarding safety reminder | Must | Bike: passenger helmet before PIN; Auto/Cab: seat belt reminder where fitted. Vehicle and plate identity remain visible before boarding |
+| F39 | Intermediate stops | Must | Up to two ordered stops, each leg at least 300 m; rider navigation targets the next stop then the final drop; End trip is blocked until stops are marked reached |
+| F40 | Ride for another person | Must | Collect guest name and Indian mobile; assigned rider sees guest identity and calls the guest; trip PIN stays with the booking customer |
+| F41 | Scheduled request | Must | 20 minutes to 7 days ahead; max three upcoming; customer and admin can cancel while pending; backend starts normal matching 10 minutes before pickup; no driver guarantee |
+| F42 | Cab shared preview | Should | Visible, bookable Cab option with clear notice that no co-rider matching or shared discount is active |
+| F43 | One-way intercity Cab preview | Should | 20–500 km direct distance; current Cab distance fare only; tolls, permits and return charges excluded and labelled |
+| F44 | Rider destination filter | Should | Rider can choose or clear a destination; matching only offers trips that move at least 0.5 km or 2% of remaining distance toward it |
+| F45 | Operator promotions | Should | Super admin sets code, time window, cap, redemption limit and active state; customer sees discount; rider sees full fare; admin tracks and manually settles subsidy |
+| F46 | Rider self-cancel quota | Must | Three assigned-trip self-cancellations per Asia/Kolkata calendar day; fourth blocked; no-show and customer/admin cancellation do not consume the quota |
+| F47 | Admin case triage | Must | Support priority, category, assigned agent, status, resolution, reply and notes; super admin also manages promotions, subsidies, users, riders, trips, scheduled rides, fares and audit |
 
 ## 6. Main user flows
 
 **6.1 Customer books a ride**
 1. First launch: pick language, enter email, enter OTP, set name.
 2. Home: full-screen map and "Where to?" sheet. Pickup defaults to GPS and is editable.
-3. Search or tap the map. Pick Bike, Auto or Cab; see fare, distance, ETA. Optionally add a short pickup instruction.
+3. Search or tap the map. Pick Bike, Auto or Cab; see fare, distance, ETA. Optionally add up to two stops, a guest passenger, pickup instruction, valid promotion, or a scheduled time. Cab offers labelled shared and intercity previews. Review all route points and the exact customer amount due before confirmation.
 4. Tap **Book**; a radar pulse plays while searching.
 5. Rider accepts: show photo, name, rating, vehicle make/model/colour and large plate, plus call, cancel, live position and the customer-only trip PIN. Ask the customer to verify the plate before boarding.
-6. Track rider to pickup. Rider marks Arrived; both apps show waiting time. Customer gives the 4-digit PIN only when boarding; a valid PIN is required before the server starts the trip. Then track toward drop. At trip end: fare summary, cash or direct UPI QR and app link if the driver registered a valid handle, then rating. The app never labels the fare paid without external confirmation.
+6. Track rider to pickup. Rider marks Arrived; both apps show waiting time. Customer gives the 4-digit PIN only when boarding; a valid PIN is required before the server starts the trip. For a guest booking the account holder relays the PIN to the guest outside Haan. Then track each stop and the final drop. At trip end: show rider fare, any operator-funded discount, customer amount due, cash or direct UPI QR and app link if the driver registered a valid handle, then rating. The app never labels the fare paid without external confirmation.
 7. Trip appears in history with receipt.
 
 **6.2 AI-assisted booking**
@@ -115,12 +126,17 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 **6.3 Rider completes a trip**
 1. Sign up, enter name and mobile, licence number, plate, vehicle make/model/colour/year, document expiry dates and optional UPI ID. Upload licence, RC, selfie and insurance photos; Auto and Cab also upload a commercial permit. Status: Pending. Admin reviews every field and image. Expired documents prevent approval or going online.
 2. After approval: **Go Online**. Offer shows pickup distance, trip distance, fare, 15-s countdown, Accept/Decline.
-3. After acceptance, see customer name, pickup instruction, call button and a direct Google Maps navigation button to the exact pickup coordinate. Either participant can share the trip or call 112. Tap **Arrived**; the server starts the wait clock. After five minutes without the customer, a no-show action becomes available. Otherwise ask the boarding customer for their PIN and enter it to **Start**. Only after start does the direct Google Maps button target the drop coordinate. Tap **End trip**, show a personal UPI QR or collect cash, verify payment outside Haan, and rate the customer.
+3. After acceptance, see customer or named guest, pickup instruction, route stops, full rider fare, call button and a direct Google Maps navigation button to the exact pickup coordinate. Either participant can share the trip or call 112. Tap **Arrived**; the server starts the wait clock. After five minutes without the customer, a no-show action becomes available. Otherwise ask the boarding passenger for the PIN and enter it to **Start**. Only after start does the direct Google Maps button target the next stop, then the drop; mark each stop reached. Tap **End trip**, show the customer's exact amount due via personal UPI QR or collect cash, verify payment outside Haan, and rate the customer. The operator subsidy, if any, is tracked separately for manual settlement.
 4. Earnings screen shows the day.
 
 **6.4 Admin support**
 1. Open the secret URL; log in with password and TOTP. Search by trip ID, email, phone, vehicle number.
-2. Open a trip: timeline, route, fare breakdown, assistant transcript summary. Add note, force-cancel, block/unblock, approve/reject documents, answer tickets.
+2. Open a trip: timeline, route, fare breakdown, assistant transcript summary. Add note, force-cancel, block/unblock, approve/reject documents, answer tickets. Triage cases by priority/category/owner, record a resolution, manage pending scheduled rides and promotion windows, and reconcile promotional subsidies manually.
+
+**6.6 Scheduled and filtered rides**
+1. A customer selects a date 20 minutes to 7 days away, reviews the estimated fare, confirms, and sees the scheduled request and PIN. Up to three pending requests may be held.
+2. One minute cron checks due requests. At ten minutes before pickup it creates the same normal trip ID and begins matching. If the customer already has an active trip, retry until 30 minutes after the requested time, then expire it. A booking is never represented as a reserved driver.
+3. An approved rider may set or clear a destination. Matching skips trips that do not move closer to it. The filter never changes an already accepted trip.
 
 **6.5 Edge cases (all flows)**
 
@@ -146,15 +162,21 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | Invalid or absent driver UPI ID | Show cash/direct-payment guidance; no broken QR or payment button |
 | Driver photo unavailable on weak network | Vehicle details and plate stay visible; the trip continues |
 | App version too old | Blocking update screen with download link |
+| Scheduled ride reaches match time while customer has an active trip | Keep pending and retry; expire 30 minutes after the scheduled time if still blocked |
+| Driver unavailable for scheduled ride | Normal no-rider outcome; do not claim a guaranteed pickup |
+| Driver attempts to finish before an extra stop | Server returns a stop-remaining error; navigation still targets the stop |
+| Fourth rider self-cancel in one Kolkata day | Server denies; app shows remaining quota and a support shortcut; no-show stays separate |
+| Promotion ends or reaches its cap during quote/booking | Revalidate on booking, explain that the code is unavailable and request a new confirmation |
+| Promotion redemption on a completed trip | Customer owes discounted amount; admin sees a pending operator subsidy until manually settled |
 
 ## 7. Pages and screens
 
 | Surface | Screens |
 |---|---|
-| Customer app | Language, email, OTP, name, home map, destination search, vehicle choice, finding rider, rider assigned (PIN), live trip, summary and rating, assistant (mic, confirm), history, receipt, saved places, help and tickets, profile (emergency contact, delete), settings, update required |
-| Rider app | Email, OTP, profile, documents, verification status, home (online toggle), incoming request, to pickup, PIN entry, to drop, end trip and collect, earnings, history, help, settings, update required |
+| Customer app | Language, email, OTP, name, home map, destination search, vehicle and preview mode choice, up to two stops, guest passenger, promotion, scheduled request list, finding rider, rider assigned (PIN), live trip, summary and rating, assistant (mic, confirm), history, receipt, saved places, help and tickets, profile (emergency contact, delete), settings, update required |
+| Rider app | Email, OTP, profile, documents, verification status, home (online toggle and destination filter), incoming request, to pickup, PIN entry, ordered stop navigation, to drop, end trip and collect, self-cancel quota, earnings, history, help, settings, update required |
 | Website | One long landing page (hero, how it works, features, for riders, downloads with QR, FAQ, footer) plus install guide, privacy, terms, contact. EN/HI and theme toggles |
-| Admin | Login + TOTP, dashboard, rider queue and detail, users, trips and detail, tickets, fare config, audit log, quota counters |
+| Admin | Login + TOTP, dashboard, rider queue and detail, users, trips and detail, scheduled rides, support case triage, promotions, manual subsidy ledger, fare config, audit log, quota counters |
 
 ## 8. Data
 
@@ -163,16 +185,18 @@ Every table: UUID id, created_at, updated_at.
 | Table | Key fields | Rules |
 |---|---|---|
 | users | role, email (unique), phone, name, language, theme, push_token, is_blocked, deleted_at | Phone collected, not verified in v1 |
-| rider_profiles | user, vehicle_type/number/make/model/colour/year, licence number, insurance/permit expiry, document keys, verification_status, rejection_reason, is_online, last location, rating_avg | Complete, current documents and approval required to go online; admins see documents via short-lived links; assigned customer can see driver selfie during active trip |
+| rider_profiles | user, vehicle_type/number/make/model/colour/year, licence number, insurance/permit expiry, document keys, verification_status, rejection_reason, is_online, last location, optional destination filter, rating_avg | Complete, current documents and approval required to go online; admins see documents via short-lived links; assigned customer can see driver selfie during active trip |
 | otp_codes | email, code_hash, expires_at, attempts, consumed_at | Hashed; deleted after 24 h |
 | sessions | user, refresh_token_hash, device, expires_at, revoked_at | Access 15 min, refresh 30 days, rotated |
-| trips | customer, rider, status, vehicle_type, pickup/drop (lat, lng, text), pickup_note, est and final distance, duration, fare, pin_hash, timestamps, cancelled_by, cancel_reason, via_assistant | Transitions checked server-side only; pickup note at most 160 characters |
+| trips | customer, rider, status, vehicle_type, pickup/drop, ordered stops and next stop index, service mode, guest name/mobile, promotion, rider and customer estimated/final fares, pickup_note, pin_hash, timestamps, cancelled_by, cancel_reason, via_assistant | Transitions checked server-side only; note at most 160 characters; no End until stops reached |
+| scheduled_rides | customer, request, due time, estimate, PIN hash, status, resulting trip | Three pending per customer; same ID used for activated trip |
+| promotions, promo_redemptions | code, discount, max discount, redemption cap, active window, trip discount, settlement status | Super admin changes and settles; no automatic funds movement |
 | trip_offers | trip, rider, offered_at, responded_at, response | accepted / declined / timeout |
 | trip_locations | trip, lat, lng, recorded_at | Sampled; purged after 30 days |
 | ratings | trip, from, to, stars, comment | One per direction per trip |
 | saved_places | user, label, lat, lng, text | Max 10 per user |
 | fare_config | vehicle_type, base, per_km, per_min, minimum, updated_by | `super_admin` edits |
-| tickets, ticket_messages | user, trip (optional), subject, status, messages | Max 2,000 characters per message |
+| tickets, ticket_messages | user, trip (optional), subject, status, priority, category, owner, resolution, messages | Max 2,000 characters per message; support actions audited |
 | admin_audit_log | admin, action, entity, details, ip | Append-only |
 | assistant_logs | user, language, transcript text, intent, confidence | Text only, never audio; purged after 30 days |
 
@@ -188,10 +212,13 @@ Every table: UUID id, created_at, updated_at.
 6. **Admin security:** the path (example `/4632/admin`) is a setting, not security. Also required: hashed password, TOTP, 5 login attempts per 15 min per IP, noindex, never linked, every action audit-logged.
 7. **Secrets:** only in backend secrets; never in an app, the website or the repo. `.env.example` provided.
 8. **Privacy:** location points and AI transcripts purged after 30 days; account deletion works; privacy policy discloses all of it.
-9. **No money moves through the product.** Cash or direct UPI to the rider only.
+9. **No money moves through the product.** Cash or direct UPI to the rider only. A promotion creates an operator-funded difference to settle outside Haan; the app never asserts that settlement or customer payment occurred automatically.
 10. **Rate limits:** OTP (per email and IP), assistant (20 calls/hour/user), login.
 11. **Active trip blocks account deletion** until it ends.
 12. **Never add credits or a card** to any service; usage stops at the free cap and degrades gracefully.
+13. **Rider cancellations:** count assigned-trip self-cancels by Asia/Kolkata day; allow three, block the fourth; no-show and customer/admin cancellations do not count.
+14. **Route order:** the pickup remains the target until the customer PIN starts the ride. Then Google Maps targets each unvisited stop in order, finally the drop.
+15. **Preview honesty:** shared mode has no passenger pooling; intercity uses a one-way estimate; scheduled requests have no driver guarantee. State these before booking.
 
 ## 10. AI features
 
@@ -285,6 +312,14 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 21 | Payment handoff | Invalid UPI IDs are rejected; active trip hides the driver handle; completed trip offers an exact-fare QR and UPI app link when valid |
 | 22 | Safety on both sides | Assigned customer and rider can share a signed live link and call 112; outsiders cannot create a share link |
 | 23 | Boarding check | Both apps show a vehicle-appropriate helmet or seat belt reminder before trip start |
+| 24 | Stops | Quote includes up to two legs; after PIN Google Maps targets each stop in order; server rejects premature completion |
+| 25 | Guest ride | Guest name and phone reach only the assigned rider during the live trip; booking customer's PIN is still required |
+| 26 | Scheduled request | Customer can hold/cancel three; due cron creates a matchable trip ten minutes early; admin can view/cancel pending |
+| 27 | Preview modes | Shared and intercity Cab options appear with their operational and pricing limits stated before confirmation |
+| 28 | Destination filter | Rider can set/clear; matching excludes trips that do not move toward the chosen destination |
+| 29 | Promotion | Admin can create/activate/deactivate; booking reapplies cap/window; customer due and rider fare differ by the discount; subsidy ledger records manual settlement |
+| 30 | Self-cancel quota | Three rider self-cancels succeed in a Kolkata day, fourth fails; remaining count is shown; no-show does not count |
+| 31 | Support triage | Agent can set priority, category, owner, status and resolution; replies and all changes are auditable |
 
 ## 17. Open questions
 

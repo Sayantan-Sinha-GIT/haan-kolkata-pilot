@@ -226,10 +226,17 @@ class _RideHomeState extends State<RideHome> {
   LatLng center = kolkata, pickup = kolkata;
   LatLng? drop, rider;
   String pickupLabel = 'Kolkata', dropLabel = '';
-  final pickupNote = TextEditingController();
-  String vehicle = 'Bike';
+  final pickupNote = TextEditingController(), guestName=TextEditingController(),
+      guestPhone=TextEditingController(), promoCode=TextEditingController();
+  final List<Map<String,dynamic>> stops=[];
+  List<dynamic> scheduled=[];
+  List<dynamic> availablePromotions=[];
+  String vehicle = 'Bike', rideMode='standard';
+  bool guestRide=false;
+  DateTime? scheduledFor;
   Map<String, dynamic>? estimate, trip;
   List<LatLng>? routePoints;
+  int estimateRevision=0;
   String? pin;
   bool busy = false, viaAssistant = false;
   String? error;
@@ -244,6 +251,8 @@ class _RideHomeState extends State<RideHome> {
     super.initState();
     _position();
     _loadActive();
+    _loadScheduled();
+    _loadPromotions();
     timer = Timer.periodic(
         const Duration(seconds: 4), (_) => _loadActive(silent: true));
   }
@@ -252,7 +261,19 @@ class _RideHomeState extends State<RideHome> {
   void dispose() {
     timer?.cancel();
     pickupNote.dispose();
+    guestName.dispose();guestPhone.dispose();promoCode.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadScheduled() async {
+    try{final d=await app.api.get('/v1/scheduled');
+      if(mounted)setState(()=>scheduled=List<dynamic>.from(d['scheduled']??[]));}
+    catch(_){/* Booking remains available if schedules cannot load. */}
+  }
+  Future<void> _loadPromotions() async {
+    try{final d=await app.api.get('/v1/promotions');
+      if(mounted)setState(()=>availablePromotions=List<dynamic>.from(d['promotions']??[]));}
+    catch(_){/* Promotion entry remains usable. */}
   }
 
   Future<void> _position() async {
@@ -352,27 +373,63 @@ class _RideHomeState extends State<RideHome> {
     }
   }
 
+  Future<void> chooseStop() async {
+    if(stops.length>=2)return;
+    final selected=await showModalBottomSheet<Map<String,dynamic>>(
+      context:context,isScrollControlled:true,useSafeArea:true,showDragHandle:true,
+      builder:(_)=>PlacePicker(initial:drop));
+    if(selected!=null&&mounted){
+      setState(()=>stops.add({'lat':selected['lat'],'lng':selected['lng'],'text':'${selected['name']}'}));
+      _estimate();
+    }
+  }
+
+  Future<void> chooseSchedule() async {
+    final now=DateTime.now();
+    final date=await showDatePicker(context:context,initialDate:now.add(const Duration(days:1)),
+      firstDate:now,lastDate:now.add(const Duration(days:7)));
+    if(date==null||!mounted)return;
+    final time=await showTimePicker(context:context,initialTime:TimeOfDay.fromDateTime(now.add(const Duration(minutes:30))));
+    if(time==null||!mounted)return;
+    final selected=DateTime(date.year,date.month,date.day,time.hour,time.minute);
+    if(selected.isBefore(now.add(const Duration(minutes:20)))||selected.isAfter(now.add(const Duration(days:7)))){
+      showMessage(context,app.language=='hi'?'20 मिनट से 7 दिन के बीच समय चुनें।':'Choose a time 20 minutes to 7 days ahead.');return;
+    }
+    final hadPromo=promoCode.text.trim().isNotEmpty;
+    if(hadPromo)promoCode.clear();
+    setState(()=>scheduledFor=selected);
+    if(hadPromo){showMessage(context,app.language=='hi'?'प्रोमो कोड अभी तय यात्रा पर लागू नहीं हैं।':'Promotion codes apply to immediate rides only.');_estimate();}
+  }
+
+  Map<String,dynamic> _ridePayload()=>{
+    'pickup':point(pickup,pickupLabel),'drop':point(drop!,dropLabel),'vehicle':vehicle,
+    'mode':rideMode,'stops':stops,'pickup_note':pickupNote.text.trim(),
+    'guest':guestRide?{'name':guestName.text.trim(),'phone':guestPhone.text.trim()}:null,
+    'promo_code':promoCode.text.trim().isEmpty?null:promoCode.text.trim().toUpperCase(),
+    'via_assistant':viaAssistant,
+  };
+
   Future<void> _estimate() async {
     if (drop == null) return;
+    final revision=++estimateRevision;
     setState(() {
       busy = true;
       error = null;
+      estimate = null;
     });
     try {
-      final d = await app.api.post('/v1/fare/estimate', {
-        'pickup': point(pickup, pickupLabel),
-        'drop': point(drop!, dropLabel),
-        'vehicle': vehicle
-      });
-      if (mounted) setState(() {
+      final d = await app.api.post('/v1/fare/estimate', {..._ridePayload(),'guest':null});
+      if (mounted&&revision==estimateRevision) setState(() {
         estimate = Map<String, dynamic>.from(d);
         try { routePoints = d['polyline'] is String ? decodePolyline(d['polyline']) : null; }
         on FormatException { routePoints = null; }
+        routePoints ??= [pickup,...stops.map((s)=>LatLng((s['lat'] as num).toDouble(),
+          (s['lng'] as num).toDouble())),drop!];
       });
     } catch (e) {
-      if (mounted) setState(() => error = '$e');
+      if (mounted&&revision==estimateRevision) setState(() => error = '$e');
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted&&revision==estimateRevision) setState(() => busy = false);
     }
   }
 
@@ -383,22 +440,30 @@ class _RideHomeState extends State<RideHome> {
       error = null;
     });
     try {
-      final d = await app.api.post('/v1/trips', {
-        'pickup': point(pickup, pickupLabel),
-        'drop': point(drop!, dropLabel),
-        'vehicle': vehicle,
-        'pickup_note': pickupNote.text.trim(),
-        'confirmed': true,
-        'via_assistant': viaAssistant
+      final schedule=scheduledFor;
+      final d = await app.api.post(schedule==null?'/v1/trips':'/v1/scheduled', {
+        ..._ridePayload(),'confirmed':true,
+        if(schedule!=null)'scheduled_for':schedule.toUtc().toIso8601String(),
       });
-      final id = '${d['trip']['id']}';
+      final id = '${schedule==null?d['trip']['id']:d['scheduled']['id']}';
       await secure.write(key: 'pin:$id', value: '${d['pin']}');
-      setState(() {
+      if(!mounted)return;
+      if(schedule==null){setState(() {
         pin = '${d['pin']}';
         trip = Map<String, dynamic>.from(d['trip']);
-      });
+      });}else{
+        setState(()=>scheduledFor=null);
+        showMessage(context,app.language=='hi'?'यात्रा तय हो गई। पिकअप से 10 मिनट पहले राइडर खोजेंगे।':'Ride scheduled. Matching begins 10 minutes before pickup.');
+        await _loadScheduled();
+      }
       pickupNote.clear();
-      await _loadActive();
+      guestName.clear();guestPhone.clear();promoCode.clear();
+      setState((){
+        estimateRevision++;
+        stops.clear();guestRide=false;rideMode='standard';scheduledFor=null;
+        estimate=null;routePoints=null;
+      });
+      if(schedule==null)await _loadActive();
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -451,15 +516,32 @@ class _RideHomeState extends State<RideHome> {
     }
   }
 
+  Future<void> _shareWithGuest() async {
+    if(trip==null||'${trip!['guest_phone']??''}'.isEmpty)return;
+    try{
+      final result=await app.api.get('/v1/trips/${trip!['id']}/share');
+      final message='Haan ride for ${trip!['guest_name']}: ${trip!['pickup_text']} → ${trip!['drop_text']}. Driver ${trip!['rider_name']??'pending'}, plate ${trip!['vehicle_number']??'pending'}. Live trip: ${result['url']}. Ask the booker for the boarding PIN only after checking the vehicle.';
+      final uri=Uri(scheme:'sms',path:'${trip!['guest_phone']}',queryParameters:{'body':message});
+      if(!await launchUrl(uri,mode:LaunchMode.externalApplication)){
+        await Clipboard.setData(ClipboardData(text:message));
+        if(mounted)showMessage(context,'Guest trip details copied.');
+      }
+    }catch(e){if(mounted)showMessage(context,'$e');}
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = '${trip?['status'] ?? ''}';
     final approaching = status == 'accepted' || status == 'arrived';
+    final tripStops=trip?['stops'] is List
+      ? (trip!['stops'] as List).map((s)=>LatLng((s['lat'] as num).toDouble(),
+          (s['lng'] as num).toDouble())).toList() : <LatLng>[];
+    final nextStopIndex=(trip?['next_stop_index'] as num?)?.toInt()??0;
     final List<LatLng>? activeRoute = approaching && rider != null
         ? [rider!, pickup]
         : status == 'in_progress' && rider != null && drop != null
-            ? [rider!, drop!]
-            : routePoints;
+            ? [rider!,...tripStops.skip(nextStopIndex),drop!]
+            : trip!=null&&drop!=null?[pickup,...tripStops,drop!]:routePoints;
     return Stack(children: [
       Positioned.fill(
           child: HaanMap(
@@ -577,10 +659,45 @@ class _RideHomeState extends State<RideHome> {
                 vehicle
               },
               onSelectionChanged: (v) {
-                setState(() => vehicle = v.first);
+                setState(() {vehicle = v.first;if(vehicle!='Cab')rideMode='standard';});
                 _estimate();
               }),
           const SizedBox(height: 14),
+          Text(app.language=='hi'?'यात्रा का प्रकार':'Ride type',style:Theme.of(context).textTheme.titleMedium),
+          Wrap(spacing:8,children:[
+            ChoiceChip(label:Text(app.language=='hi'?'सीधी यात्रा':'Standard'),selected:rideMode=='standard',
+              onSelected:(_){setState(()=>rideMode='standard');_estimate();}),
+            ChoiceChip(label:Text(app.language=='hi'?'शेयर पूर्वावलोकन':'Shared preview'),selected:rideMode=='shared_preview',
+              onSelected:(_){setState((){rideMode='shared_preview';vehicle='Cab';});_estimate();}),
+            ChoiceChip(label:Text(app.language=='hi'?'दूसरे शहर':'Intercity'),selected:rideMode=='intercity',
+              onSelected:(_){setState((){rideMode='intercity';vehicle='Cab';});_estimate();}),
+          ]),
+          if(rideMode=='shared_preview')Text(app.language=='hi'
+            ? 'यह शेयर राइड का पूर्वावलोकन है। अभी दूसरे यात्री का मिलान नहीं होता।'
+            : 'Shared-ride preview: co-rider matching is not active yet.'),
+          if(rideMode=='intercity')Text(app.language=='hi'
+            ? 'केवल एक तरफ़ की कैब यात्रा, 20–500 किमी। वापसी का किराया शामिल नहीं है।'
+            : 'One-way Cab preview, 20–500 km. Tolls, permits and return travel are not included.'),
+          const SizedBox(height:10),
+          Text(app.language=='hi'?'रास्ते में रुकें':'Extra stops',style:Theme.of(context).textTheme.titleMedium),
+          ...stops.asMap().entries.map((entry)=>ListTile(contentPadding:EdgeInsets.zero,
+            leading:CircleAvatar(child:Text('${entry.key+1}')),
+            title:Text('${entry.value['text']}'),
+            trailing:IconButton(icon:const Icon(Icons.close),tooltip:'Remove stop',onPressed:(){
+              setState(()=>stops.removeAt(entry.key));_estimate();}))),
+          if(stops.length<2)TextButton.icon(onPressed:chooseStop,icon:const Icon(Icons.add_location_alt),
+            label:Text(app.language=='hi'?'स्टॉप जोड़ें':'Add a stop (up to 2)')),
+          SwitchListTile(contentPadding:EdgeInsets.zero,
+            title:Text(app.language=='hi'?'किसी और के लिए बुक करें':'Book for someone else'),
+            subtitle:Text(app.language=='hi'?'यात्री का नाम और मोबाइल दें।':'Add the passenger’s name and mobile number.'),
+            value:guestRide,onChanged:(value){setState(()=>guestRide=value);_estimate();}),
+          if(guestRide)...[
+            TextField(controller:guestName,maxLength:80,decoration:InputDecoration(
+              labelText:app.language=='hi'?'यात्री का नाम':'Passenger name')),
+            TextField(controller:guestPhone,keyboardType:TextInputType.phone,
+              decoration:InputDecoration(labelText:app.language=='hi'?'यात्री का मोबाइल':'Passenger mobile')),
+            Text(app.language=='hi'?'बुक करने वाला यात्री को PIN भेजे।':'Share the boarding PIN with your passenger privately.'),
+          ],
           if (estimate != null)
             Card(
                 child: Padding(
@@ -590,17 +707,47 @@ class _RideHomeState extends State<RideHome> {
                         children: [
                           Text(
                               '${estimate!['km']} km · ${estimate!['minutes']} min'),
-                          Text('₹${estimate!['rupees']}',
-                              style: Theme.of(context).textTheme.headlineMedium)
+                          Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
+                            Text('₹${estimate!['rupees']}',
+                              style: Theme.of(context).textTheme.headlineMedium),
+                            if((estimate!['promo_discount_rupees'] as num?)?.toInt()!=0)
+                              Text('₹${estimate!['promo_discount_rupees']} ${app.language=='hi'?'छूट':'off'}'),
+                          ])
                         ]))),
+          TextField(controller:promoCode,textCapitalization:TextCapitalization.characters,
+            enabled:scheduledFor==null,
+            onChanged:(_)=>setState(()=>estimate=null),
+            decoration:InputDecoration(labelText:app.language=='hi'?'प्रोमो कोड':'Promotion code',
+              suffixIcon:IconButton(onPressed:_estimate,icon:const Icon(Icons.check),tooltip:'Apply code'))),
+          if(scheduledFor==null&&availablePromotions.isNotEmpty)Wrap(spacing:8,children:availablePromotions.take(3).map((p)=>
+            ActionChip(label:Text('${p['code']}'),onPressed:(){promoCode.text='${p['code']}';_estimate();})).toList()),
+          ListTile(contentPadding:EdgeInsets.zero,leading:const Icon(Icons.schedule),
+            title:Text(scheduledFor==null?(app.language=='hi'?'बाद के लिए तय करें':'Schedule for later')
+              : '${app.language=='hi'?'पिकअप':'Pickup'}: ${MaterialLocalizations.of(context).formatFullDate(scheduledFor!)} · ${TimeOfDay.fromDateTime(scheduledFor!).format(context)}'),
+            trailing:scheduledFor==null?const Icon(Icons.chevron_right):IconButton(icon:const Icon(Icons.close),
+              tooltip:'Remove schedule',onPressed:()=>setState(()=>scheduledFor=null)),
+            onTap:chooseSchedule),
           TextField(controller: pickupNote, maxLength: 160,
             decoration: InputDecoration(labelText: app.tr('pickupNote'),
               hintText: app.tr('pickupNoteHint'),
               prefixIcon: const Icon(Icons.notes))),
           const SizedBox(height: 10),
-          HaanButton(busy ? '…' : app.tr('book'),
+          HaanButton(busy ? '…' : scheduledFor==null?app.tr('book'):
+            (app.language=='hi'?'यात्रा तय करें':'Schedule ride'),
               onPressed:
                   busy || estimate == null ? null : () => _confirmBooking())
+        ],
+        if(scheduled.any((s)=>s['status']=='scheduled'))...[
+          const SizedBox(height:18),
+          Text(app.language=='hi'?'आने वाली यात्राएँ':'Upcoming scheduled rides',
+            style:Theme.of(context).textTheme.titleLarge),
+          ...scheduled.where((s)=>s['status']=='scheduled').take(3).map((s)=>Card(
+            child:ListTile(title:Text('${s['pickup_text']} → ${s['drop_text']}'),
+              subtitle:Text('${DateTime.tryParse('${s['scheduled_for']}')?.toLocal()} · ₹${s['estimate_rupees']}'),
+              trailing:IconButton(icon:const Icon(Icons.cancel_outlined),tooltip:'Cancel scheduled ride',
+                onPressed:() async {try{await app.api.post('/v1/scheduled/${s['id']}/cancel',{});
+                  await secure.delete(key:'pin:${s['id']}');await _loadScheduled();}
+                  catch(e){if(mounted)showMessage(context,'$e');}})))),
         ],
         const SizedBox(height: 12),
         TextButton.icon(
@@ -615,6 +762,11 @@ class _RideHomeState extends State<RideHome> {
                 title: Text(app.tr('readBack')),
                 content: Text(
                     '$pickupLabel → $dropLabel\n$vehicle · ₹${estimate?['rupees']}'
+                    '${rideMode=='standard'?'':'\n${rideMode=='intercity'?'Intercity (one way)':'Shared preview (no co-rider match)'}'}'
+                    '${stops.isEmpty?'':'\nStops: ${stops.map((s)=>s['text']).join(' → ')}'}'
+                    '${guestRide?'\nPassenger: ${guestName.text.trim()} · ${guestPhone.text.trim()}':''}'
+                    '${scheduledFor==null?'':'\nScheduled: ${scheduledFor!.toLocal()} · matching starts 10 minutes early; a driver is not guaranteed'}'
+                    '${promoCode.text.trim().isEmpty?'':'\nPromotion: ${promoCode.text.trim().toUpperCase()}'}'
                     '${pickupNote.text.trim().isEmpty ? '' : '\n${app.tr('pickupNote')}: ${pickupNote.text.trim()}'}'),
                 actions: [
                   TextButton(
@@ -640,6 +792,14 @@ class _RideHomeState extends State<RideHome> {
         const SizedBox(height: 14),
         Text(
             '${trip?['pickup_text'] ?? pickupLabel} → ${trip?['drop_text'] ?? dropLabel}'),
+        if((trip?['stops'] as List?)?.isNotEmpty??false)
+          Text('${app.language=='hi'?'स्टॉप':'Stops'}: ${(trip!['stops'] as List).map((s)=>s['text']).join(' → ')}'),
+        if('${trip?['guest_name']??''}'.isNotEmpty)
+          Text('${app.language=='hi'?'यात्री':'Passenger'}: ${trip!['guest_name']}'),
+        if(trip?['service_mode']=='shared_preview')
+          Text(app.language=='hi'?'शेयर पूर्वावलोकन · दूसरे यात्री का मिलान अभी नहीं होता।':'Shared preview · no co-rider matching yet.'),
+        if(trip?['service_mode']=='intercity')
+          Text(app.language=='hi'?'एक तरफ़ की इंटरसिटी यात्रा':'One-way intercity ride'),
         const SizedBox(height: 12),
         if (status == 'searching') const LinearProgressIndicator(),
         if (status == 'arrived')
@@ -704,11 +864,13 @@ class _RideHomeState extends State<RideHome> {
         ],
         const SizedBox(height: 8),
         Text(
-            '${app.tr('fare')}: ₹${trip?['final_rupees'] ?? trip?['estimate_rupees'] ?? ''}'),
+            '${app.tr('fare')}: ₹${trip?['customer_final_rupees'] ?? trip?['customer_estimate_rupees'] ?? trip?['final_rupees'] ?? trip?['estimate_rupees'] ?? ''}'),
+        if((trip?['promo_discount_rupees'] as num?)?.toInt()!=0)
+          Text('${trip?['promotion_code']??'Promotion'} · ₹${trip?['promo_discount_rupees']} ${app.language=='hi'?'छूट':'off'}'),
         if (status != 'in_progress')
           TextButton(onPressed: _cancel, child: Text(app.tr('cancel'))),
         if (['accepted','arrived','in_progress'].contains(status))
-          Row(children: [
+          Wrap(spacing:8,children: [
             TextButton.icon(
                 onPressed: () => launchUrl(Uri.parse('tel:112')),
                 icon: const Icon(Icons.sos),
@@ -716,7 +878,13 @@ class _RideHomeState extends State<RideHome> {
             TextButton.icon(
                 onPressed: _shareTrip,
                 icon: const Icon(Icons.share),
-                label: Text(app.tr('share')))
+                label: Text(app.tr('share'))),
+            if('${trip?['guest_phone']??''}'.isNotEmpty)
+              TextButton.icon(onPressed:_shareWithGuest,icon:const Icon(Icons.sms),
+                label:Text(app.language=='hi'?'यात्री को जानकारी भेजें':'Send guest trip details')),
+            TextButton.icon(onPressed:()=>Navigator.push(context,MaterialPageRoute(
+              builder:(_)=>TicketForm(tripId:'${trip?['id']}'))),
+              icon:const Icon(Icons.support_agent),label:Text(app.tr('help'))),
           ]),
         if (status == 'completed') Text(app.tr('payDirect'))
       ]);
@@ -1088,14 +1256,20 @@ class _ReceiptPageState extends State<ReceiptPage> {
                             Text(
                                 '${trip!['vehicle_type']} · ${trip!['completed_at'] ?? trip!['created_at']}'),
                             Text(
-                                '₹${trip!['final_rupees'] ?? trip!['estimate_rupees']}',
+                                '₹${trip!['customer_final_rupees'] ?? trip!['customer_estimate_rupees'] ?? trip!['final_rupees'] ?? trip!['estimate_rupees']}',
                                 style:
                                     Theme.of(context).textTheme.displaySmall),
                             Text(app.tr('payDirect'))
                           ]))),
               const SizedBox(height: 20),
+              if((trip!['promo_discount_rupees'] as num?)?.toInt()!=0)
+                Text(app.language=='hi'
+                  ? 'प्रोमो छूट ₹${trip!['promo_discount_rupees']}। ड्राइवर को बाकी राशि Haan ऑपरेटर अलग से देगा; ऐप भुगतान की पुष्टि नहीं करता।'
+                  : 'Promotion discount ₹${trip!['promo_discount_rupees']}. The operator must settle that difference with the driver separately; the app cannot verify payment.'),
               Builder(builder:(context){
-                final amount=(trip!['final_rupees'] as num?)?.toInt()
+                final amount=(trip!['customer_final_rupees'] as num?)?.toInt()
+                  ??(trip!['customer_estimate_rupees'] as num?)?.toInt()
+                  ??(trip!['final_rupees'] as num?)?.toInt()
                   ??(trip!['estimate_rupees'] as num?)?.toInt()??0;
                 final uri=directUpiUri(upiId:trip!['rider_upi_id'] as String?,
                   name:trip!['rider_name'] as String?,amount:amount);

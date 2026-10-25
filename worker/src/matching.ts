@@ -1,10 +1,11 @@
 import { db } from './db';
+import { haversineKm } from './rules';
 import { broadcast } from './services';
 import type { Env } from './types';
 
 export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
   const sql = db(env);
-  const [trip] = await sql`select id,status,vehicle_type,pickup_lat,pickup_lng,created_at,search_deadline,offer_count
+  const [trip] = await sql`select id,status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng,created_at,search_deadline,offer_count
     from trips where id=${tripId}::uuid`;
   if (!trip || trip.status !== 'searching') return false;
   const expired = await sql`update trip_offers set response='timeout',responded_at=now()
@@ -22,7 +23,7 @@ export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
   }
   const elapsed = Date.now() - new Date(trip.created_at).getTime();
   const radius = elapsed >= 20_000 ? 5 : 2;
-  const candidates = await sql`select rp.user_id,
+  const candidates = await sql`select rp.user_id,rp.last_lat,rp.last_lng,rp.destination_filter_lat,rp.destination_filter_lng,
     6371*2*asin(sqrt(least(1,power(sin(radians(rp.last_lat-${Number(trip.pickup_lat)})/2),2)
     +cos(radians(${Number(trip.pickup_lat)}))*cos(radians(rp.last_lat))
     *power(sin(radians(rp.last_lng-${Number(trip.pickup_lng)})/2),2)))) as km
@@ -37,7 +38,14 @@ export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
       and not exists(select 1 from trip_offers o where o.trip_id=${tripId}::uuid and o.rider_id=rp.user_id)
       and not exists(select 1 from trips t where t.rider_id=rp.user_id and t.status in ('accepted','arrived','in_progress'))
     order by km limit 8`;
-  const candidate = candidates.find(r => Number(r.km) <= radius);
+  const candidate = candidates.find(r => {
+    if(Number(r.km)>radius)return false;
+    if(r.destination_filter_lat==null||r.destination_filter_lng==null)return true;
+    const destination={lat:Number(r.destination_filter_lat),lng:Number(r.destination_filter_lng)};
+    const before=haversineKm({lat:Number(r.last_lat),lng:Number(r.last_lng)},destination);
+    const after=haversineKm({lat:Number(trip.drop_lat),lng:Number(trip.drop_lng)},destination);
+    return after<=before-Math.min(0.5,before*0.02);
+  });
   if (!candidate) return true;
   const offers = await sql`insert into trip_offers(trip_id,rider_id) values(${tripId}::uuid,${candidate.user_id}::uuid)
     on conflict do nothing returning id`;

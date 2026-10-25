@@ -179,6 +179,8 @@ class _RiderHomeState extends State<RiderHome> {
   Timer? poll, heartbeat, countdown;
   DateTime? offerExpiry;
   int remaining = 15;
+  int cancellationsRemaining=3;
+  DateTime? cancellationsCheckedAt;
   @override
   void initState() {
     super.initState();
@@ -216,14 +218,18 @@ class _RiderHomeState extends State<RiderHome> {
       var freshRoute=routePoints;
       if (t == null) { routeKey=null; freshRoute=null; }
       else {
-        final nextKey='${t['id']}:${t['status']=='in_progress'?'drop':'pickup'}';
+        final nextKey='${t['id']}:${t['status']=='in_progress'?'drop':'pickup'}:${t['next_stop_index']??0}';
         if (routeKey != nextKey) {
           routeKey=nextKey;
           final pos=await currentPosition();
           if (pos!=null) {
             center=LatLng(pos.latitude,pos.longitude);
+            final stops=t['stops'] is List?t['stops'] as List:[];
+            final nextIndex=(t['next_stop_index'] as num?)?.toInt()??0;
+            final nextStop=t['status']=='in_progress'&&nextIndex<stops.length?stops[nextIndex]:null;
             final target=t['status']=='in_progress'
-              ? LatLng((t['drop_lat'] as num).toDouble(),(t['drop_lng'] as num).toDouble())
+              ? nextStop==null?LatLng((t['drop_lat'] as num).toDouble(),(t['drop_lng'] as num).toDouble())
+                :LatLng((nextStop['lat'] as num).toDouble(),(nextStop['lng'] as num).toDouble())
               : LatLng((t['pickup_lat'] as num).toDouble(),(t['pickup_lng'] as num).toDouble());
             freshRoute=[center,target];
             try {
@@ -234,6 +240,11 @@ class _RiderHomeState extends State<RiderHome> {
         }
       }
       final od = await app.api.get('/v1/rider/offers');
+      int? cancelRemaining;
+      if(cancellationsCheckedAt==null||DateTime.now().difference(cancellationsCheckedAt!)>const Duration(seconds:30)){
+        try{final d=await app.api.get('/v1/rider/cancellations');cancelRemaining=(d['remaining'] as num).toInt();
+          cancellationsCheckedAt=DateTime.now();}catch(_){/* Server still enforces the limit. */}
+      }
       if (!mounted) return;
       final fresh = od['offers'] as List;
       if (fresh.isNotEmpty && offers.isEmpty) {
@@ -248,6 +259,7 @@ class _RiderHomeState extends State<RiderHome> {
         trip = t;
         routePoints = freshRoute;
         offers = fresh;
+        if(cancelRemaining!=null)cancellationsRemaining=cancelRemaining;
         offerExpiry = fresh.isNotEmpty ? DateTime.parse('${fresh.first['expires_at']}') : null;
         if (offerExpiry != null)
           remaining = offerExpiry!
@@ -318,6 +330,7 @@ class _RiderHomeState extends State<RiderHome> {
     setState(() => busy = true);
     try {
       await app.api.post('/v1/trips/${trip!['id']}/$action', body);
+      if(action=='cancel')cancellationsCheckedAt=null;
       await refresh();
     } catch (e) {
       if (mounted) showMessage(context, '$e');
@@ -356,8 +369,11 @@ class _RiderHomeState extends State<RiderHome> {
 
   Future<void> navigate(bool toPickup) async {
     if (trip == null) return;
-    final lat = trip![toPickup ? 'pickup_lat' : 'drop_lat'],
-        lng = trip![toPickup ? 'pickup_lng' : 'drop_lng'];
+    final stops=trip!['stops'] is List?trip!['stops'] as List:[];
+    final nextIndex=(trip!['next_stop_index'] as num?)?.toInt()??0;
+    final nextStop=!toPickup&&nextIndex<stops.length?stops[nextIndex]:null;
+    final lat = nextStop?['lat']??trip![toPickup ? 'pickup_lat' : 'drop_lat'],
+        lng = nextStop?['lng']??trip![toPickup ? 'pickup_lng' : 'drop_lng'];
     final uri = googleMapsDirections(
         lat: (lat as num).toDouble(),
         lng: (lng as num).toDouble(),
@@ -377,6 +393,20 @@ class _RiderHomeState extends State<RiderHome> {
         if(mounted)showMessage(context,app.language=='hi'?'ट्रिप लिंक कॉपी हुआ।':'Trip link copied.');
       }
     } catch(e) {if(mounted)showMessage(context,'$e');}
+  }
+
+  Future<void> chooseDestinationFilter() async {
+    final selected=await showModalBottomSheet<Map<String,dynamic>>(
+      context:context,isScrollControlled:true,useSafeArea:true,showDragHandle:true,
+      builder:(_)=>const RiderDestinationPicker());
+    if(selected==null||!mounted)return;
+    try{
+      await app.api.patch('/v1/rider/destination-filter',{
+        'destination':selected['clear']==true?null:selected,
+      });
+      await refresh();
+      if(mounted)showMessage(context,selected['clear']==true?'Destination filter cleared.':'Trips will move toward ${selected['text']}.');
+    }catch(e){if(mounted)showMessage(context,'$e');}
   }
 
   @override
@@ -501,7 +531,13 @@ class _RiderHomeState extends State<RiderHome> {
         SwitchListTile(
             title: Text(app.tr('lowData')),
             value: lowData,
-            onChanged: (v) => setState(() => lowData = v))
+            onChanged: (v) => setState(() => lowData = v)),
+        const SizedBox(height:8),
+        OutlinedButton.icon(onPressed:chooseDestinationFilter,
+          icon:const Icon(Icons.route),
+          label:Text('${app.language=='hi'?'घर की ओर यात्राएँ':'Trips toward'}: ${riderProfile?['destination_filter_text']??(app.language=='hi'?'कोई फ़िल्टर नहीं':'anywhere')}')),
+        if(riderProfile?['destination_filter_text']!=null)
+          Text(app.language=='hi'?'केवल उस दिशा में जाने वाली राइड मिलेंगी।':'Offers are filtered to trips moving toward this destination.'),
       ]);
   Widget _offerPanel() {
     final o = offers.first;
@@ -513,6 +549,12 @@ class _RiderHomeState extends State<RiderHome> {
       const SizedBox(height: 12),
       Text('${o['pickup_text']} → ${o['drop_text']}',
           style: Theme.of(context).textTheme.titleLarge),
+      if(o['service_mode']=='shared_preview')
+        Text('Shared preview · no co-rider matching yet'),
+      if(o['service_mode']=='intercity')Text('One-way intercity Cab'),
+      if(o['stops'] is List&&(o['stops'] as List).isNotEmpty)
+        Text('Stops: ${(o['stops'] as List).map((s)=>s['text']).join(' → ')}'),
+      if('${o['guest_name']??''}'.isNotEmpty)Text('Passenger: ${o['guest_name']}'),
       if (o['pickup_distance_km'] != null)
         Text('${app.language == 'hi' ? 'पिकअप' : 'Pickup'}: ~${o['pickup_distance_km']} km ${app.language == 'hi' ? 'दूर' : 'away'}'),
       const SizedBox(height: 10),
@@ -535,6 +577,8 @@ class _RiderHomeState extends State<RiderHome> {
 
   Widget _tripPanel() {
     final status = '${trip!['status']}';
+    final stops=trip!['stops'] is List?trip!['stops'] as List:[];
+    final nextStopIndex=(trip!['next_stop_index'] as num?)?.toInt()??0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       HaanHeading(
           app.tr(switch (status) {
@@ -549,6 +593,11 @@ class _RiderHomeState extends State<RiderHome> {
           style: Theme.of(context).textTheme.titleLarge),
       if ('${trip!['customer_name'] ?? ''}'.isNotEmpty)
         Text('${app.language == 'hi' ? 'ग्राहक' : 'Customer'}: ${trip!['customer_name']}'),
+      if('${trip!['guest_name']??''}'.isNotEmpty)
+        Text('${app.language=='hi'?'यात्री':'Passenger'}: ${trip!['guest_name']} · ${trip!['guest_phone']??''}'),
+      if(trip!['service_mode']=='shared_preview')Text('Shared preview · no co-rider matching'),
+      if(trip!['service_mode']=='intercity')Text('One-way intercity ride'),
+      if(stops.isNotEmpty)Text('Stops: ${stops.map((s)=>s['text']).join(' → ')}'),
       if ('${trip!['pickup_note'] ?? ''}'.isNotEmpty)
         Card(child: Padding(padding: const EdgeInsets.all(12),
           child: Text('${app.tr('pickupNote')}: ${trip!['pickup_note']}'))),
@@ -560,7 +609,9 @@ class _RiderHomeState extends State<RiderHome> {
       Text('${trip!['vehicle_type']} · ₹${trip!['estimate_rupees']}',
           style: Theme.of(context).textTheme.titleMedium),
       const SizedBox(height: 14),
-      HaanButton(status == 'in_progress' ? app.tr('navigateDrop') : app.tr('navigatePickup'),
+      HaanButton(status == 'in_progress'&&nextStopIndex<stops.length
+          ? '${app.language=='hi'?'अगले स्टॉप जाएँ':'Google Maps to next stop'}: ${stops[nextStopIndex]['text']}'
+          : status == 'in_progress' ? app.tr('navigateDrop') : app.tr('navigatePickup'),
           onPressed: () => navigate(status != 'in_progress')),
       const SizedBox(height: 10),
       if (status == 'accepted')
@@ -584,7 +635,11 @@ class _RiderHomeState extends State<RiderHome> {
             label:Text(app.language=='hi'?'ग्राहक नहीं आए':'Customer did not arrive')),
       ],
       if (status == 'in_progress')
-        OutlinedButton.icon(onPressed: busy ? null : () => tripAction('complete'),
+        if(nextStopIndex<stops.length)
+          OutlinedButton.icon(onPressed:busy?null:()=>tripAction('stops/arrive'),
+            icon:const Icon(Icons.flag_circle),
+            label:Text('${app.language=='hi'?'स्टॉप पूरा':'Mark stop reached'} · ${nextStopIndex+1}/${stops.length}'))
+        else OutlinedButton.icon(onPressed: busy ? null : () => tripAction('complete'),
           icon: const Icon(Icons.check_circle), label: Text(app.tr('end'))),
       if ('${trip!['customer_phone'] ?? ''}'.isNotEmpty)
         TextButton.icon(
@@ -601,7 +656,7 @@ class _RiderHomeState extends State<RiderHome> {
       ]),
       if (status != 'in_progress')
         TextButton(
-            onPressed: () async {
+            onPressed: cancellationsRemaining==0?null:() async {
               final reason = await showDialog<String>(
                   context: context,
                   builder: (c) {
@@ -624,7 +679,7 @@ class _RiderHomeState extends State<RiderHome> {
               if (reason != null && reason.isNotEmpty)
                 tripAction('cancel', body: {'reason': reason});
             },
-            child: Text(app.tr('cancel')))
+            child: Text('${app.tr('cancel')} · $cancellationsRemaining/3 ${app.language=='hi'?'आज बचे':'left today'}'))
     ]);
   }
 }
@@ -986,14 +1041,18 @@ class _RiderReceiptState extends State<RiderReceipt> {
                             Text(
                                 '${trip!['pickup_text']} → ${trip!['drop_text']}'),
                             Text(
-                                '₹${trip!['final_rupees'] ?? trip!['estimate_rupees']}',
+                                '₹${trip!['customer_final_rupees'] ?? trip!['customer_estimate_rupees'] ?? trip!['final_rupees'] ?? trip!['estimate_rupees']}',
                                 style:
                                     Theme.of(context).textTheme.displayMedium),
-                            Text(app.tr('collect'))
+                            Text(app.language=='hi'?'ग्राहक से लें':'Collect from customer'),
+                            if((trip!['promo_discount_rupees'] as num?)?.toInt()!=0)
+                              Text('₹${trip!['promo_discount_rupees']} ${app.language=='hi'?'प्रोमो सब्सिडी — ऑपरेटर से अलग':'promotion subsidy — settle separately with operator'}'),
                           ]))),
               const SizedBox(height:16),
               Builder(builder:(context){
-                final amount=(trip!['final_rupees'] as num?)?.toInt()
+                final amount=(trip!['customer_final_rupees'] as num?)?.toInt()
+                  ??(trip!['customer_estimate_rupees'] as num?)?.toInt()
+                  ??(trip!['final_rupees'] as num?)?.toInt()
                   ??(trip!['estimate_rupees'] as num?)?.toInt()??0;
                 final uri=directUpiUri(upiId:trip!['rider_upi_id'] as String?,
                   name:trip!['rider_name'] as String?,amount:amount);
@@ -1182,4 +1241,44 @@ class _RiderHelpState extends State<RiderHelp> {
                               .toList()));
               }))
       ]));
+}
+
+class RiderDestinationPicker extends StatefulWidget {
+  const RiderDestinationPicker({super.key});
+  @override
+  State<RiderDestinationPicker> createState()=>_RiderDestinationPickerState();
+}
+class _RiderDestinationPickerState extends State<RiderDestinationPicker> {
+  final search=TextEditingController();
+  List<dynamic> places=[];
+  bool busy=false;
+  String? error;
+  @override
+  void dispose(){search.dispose();super.dispose();}
+  Future<void> find() async {
+    if(search.text.trim().length<3){setState(()=>error='Type at least three letters.');return;}
+    setState((){busy=true;error=null;});
+    try{final d=await app.api.get('/v1/places/search?q=${Uri.encodeQueryComponent(search.text.trim())}');
+      if(mounted)setState(()=>places=List<dynamic>.from(d['places']??[]));}
+    catch(e){if(mounted)setState(()=>error='$e');}
+    finally{if(mounted)setState(()=>busy=false);}
+  }
+  @override
+  Widget build(BuildContext context)=>Padding(
+    padding:EdgeInsets.fromLTRB(20,12,20,MediaQuery.viewInsetsOf(context).bottom+24),
+    child:ConstrainedBox(constraints:const BoxConstraints(maxHeight:520),
+      child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text(app.language=='hi'?'किस दिशा में जाना है?':'Where are you headed?',style:Theme.of(context).textTheme.headlineSmall),
+        const SizedBox(height:12),
+        TextField(controller:search,autofocus:true,textInputAction:TextInputAction.search,
+          onSubmitted:(_)=>find(),decoration:InputDecoration(labelText:app.language=='hi'?'मंज़िल खोजें':'Search destination',
+            suffixIcon:IconButton(onPressed:find,icon:const Icon(Icons.search)))),
+        if(busy)const LinearProgressIndicator(),
+        if(error!=null)Text(error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
+        Flexible(child:ListView(shrinkWrap:true,children:places.map((p)=>ListTile(
+          title:Text('${p['name']??p['text']??'Place'}'),
+          onTap:()=>Navigator.pop(context,{'lat':p['lat'],'lng':p['lng'],'text':'${p['name']??p['text']}'}))).toList())),
+        TextButton.icon(onPressed:()=>Navigator.pop(context,{'clear':true}),
+          icon:const Icon(Icons.close),label:Text(app.language=='hi'?'फ़िल्टर हटाएँ':'Clear destination filter')),
+      ])));
 }

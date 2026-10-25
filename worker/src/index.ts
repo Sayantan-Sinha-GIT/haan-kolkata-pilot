@@ -6,6 +6,7 @@ import { fare, haversineKm, normalizeVehicleNumber, validCoordinates, validFutur
 import { advanceMatch } from './matching';
 import { assistantIntent, broadcast, routeEstimate, searchPlaces, sendEmail, transcribe, TripRoom } from './services';
 import { sendPush } from './push';
+import { parseRideOptions, routeRide, promotionDiscount, type RideOptions } from './ride_features';
 import type { App, Env, Principal } from './types';
 
 export { TripRoom };
@@ -47,6 +48,46 @@ async function issueTokens(env: Env, user: Principal, device: string) {
   await db(env)`insert into sessions(user_id,refresh_token_hash,device,expires_at) values
     (${user.id}::uuid,${await hmac(env.SESSION_SECRET, refresh)},${device.slice(0,100)},now()+interval '30 days')`;
   return { access_token: await signAccess(env.SESSION_SECRET, user), refresh_token: refresh, user };
+}
+
+async function promotionForFare(env:Env,code:string|null,riderFare:number){
+  if(!code)return {promotion:null,discount:0};
+  const [promotion]=await db(env)`select p.id,p.code,p.title,p.discount_type,p.amount,p.max_discount,p.max_redemptions,
+    (select count(*)::int from promo_redemptions pr join trips t on t.id=pr.trip_id
+      where pr.promotion_id=p.id and t.status not in ('cancelled','no_riders_found')) as used
+    from promotions p where p.code=${code} and p.active and p.starts_at<=now() and p.ends_at>now()`;
+  if(!promotion||Number(promotion.used)>=Number(promotion.max_redemptions))return null;
+  return {promotion,discount:promotionDiscount(riderFare,promotion.discount_type,Number(promotion.amount),Number(promotion.max_discount))};
+}
+
+async function activateScheduledRide(env:Env,id:string){
+  const sql=db(env);
+  const [claim]=await sql`update scheduled_rides s set status='activated'
+    where s.id=${id}::uuid and s.status='scheduled' and s.scheduled_for<=now()+interval '10 minutes'
+      and not exists(select 1 from trips t where t.customer_id=s.customer_id
+        and t.status in ('searching','accepted','arrived','in_progress'))
+    returning s.id,s.customer_id,s.request,s.estimate_rupees,s.estimated_km,s.estimated_min,s.pin_hash`;
+  if(!claim)return false;
+  const options=claim.request as RideOptions&{pickupNote:string|null;viaAssistant:boolean};
+  try{
+    await sql`insert into trips(id,customer_id,vehicle_type,pickup_lat,pickup_lng,pickup_text,pickup_note,
+      drop_lat,drop_lng,drop_text,estimated_km,estimated_min,estimate_rupees,pin_hash,via_assistant,
+      service_mode,stops,guest_name,guest_phone,customer_estimate_rupees)
+      values(${id}::uuid,${claim.customer_id}::uuid,${options.vehicle}::vehicle_type,
+        ${options.pickup.lat},${options.pickup.lng},${options.pickup.text},${options.pickupNote},
+        ${options.drop.lat},${options.drop.lng},${options.drop.text},${claim.estimated_km},${claim.estimated_min},
+        ${claim.estimate_rupees},${claim.pin_hash},${options.viaAssistant},${options.mode},
+        ${JSON.stringify(options.stops)}::jsonb,${options.guestName},${options.guestPhone},${claim.estimate_rupees})`;
+    await sql`update scheduled_rides set trip_id=${id}::uuid where id=${id}::uuid`;
+    await advanceMatch(env,id);
+    const room=env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(id));
+    await room.fetch('https://room.internal/schedule',{method:'POST',body:JSON.stringify({tripId:id})});
+    return true;
+  }catch(e){
+    await sql`update scheduled_rides set status='scheduled' where id=${id}::uuid and trip_id is null`;
+    if(!String(e).includes('customer_one_active_trip'))throw e;
+    return false;
+  }
 }
 
 const allowedOrigin = (origin: string, expected: string) => origin === expected || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
@@ -128,14 +169,23 @@ api.get('/v1/places/search', async c => {
   return c.json({ places: await searchPlaces(c.env, q) });
 });
 api.post('/v1/fare/estimate', async c => {
-  const input = await body<{ pickup: unknown; drop: unknown; vehicle: Vehicle }>(c.req.raw);
-  if (!validPoint(input.pickup) || !validPoint(input.drop) || !['Bike','Auto','Cab'].includes(input.vehicle)) return error('Choose a pickup, destination and vehicle.', 'invalid_trip');
-  const direct = haversineKm(input.pickup,input.drop);
-  if (direct < 0.3) return error('Choose a destination at least 300 metres away.', 'too_close');
-  const route=await routeEstimate(c.env,input.pickup,input.drop,input.vehicle);
+  const input = await body<Record<string,unknown>>(c.req.raw);
+  const parsed=parseRideOptions(input);if('error' in parsed)return error(parsed.error,'invalid_trip');
+  const options=parsed.options;
+  const route=await routeRide(c.env,options);
   const {km,minutes}=route;
-  const [config] = await db(c.env)`select base,per_km,per_min,minimum from fare_config where vehicle_type=${input.vehicle}::vehicle_type`;
-  return c.json({ km, minutes, rupees: fare({ base:Number(config.base),per_km:Number(config.per_km),per_min:Number(config.per_min),minimum:Number(config.minimum) },km,minutes), route_source:route.source, polyline:route.polyline||null });
+  const [config] = await db(c.env)`select base,per_km,per_min,minimum from fare_config where vehicle_type=${options.vehicle}::vehicle_type`;
+  const riderFare=fare({ base:Number(config.base),per_km:Number(config.per_km),per_min:Number(config.per_min),minimum:Number(config.minimum) },km,minutes);
+  const promotion=await promotionForFare(c.env,options.promoCode,riderFare);
+  if(!promotion)return error('Promotion is unavailable or has expired.','invalid_promotion',409);
+  return c.json({ km, minutes, rupees:riderFare-promotion.discount,rider_fare_rupees:riderFare,
+    promo_discount_rupees:promotion.discount,promotion_title:promotion.promotion?.title||null,
+    service_mode:options.mode,stops:options.stops,route_source:route.source, polyline:route.polyline||null });
+});
+api.get('/v1/promotions',async c=>{
+  const promotions=await db(c.env)`select code,title,discount_type,amount,max_discount,ends_at from promotions
+    where active and starts_at<=now() and ends_at>now() order by ends_at limit 20`;
+  return c.json({promotions});
 });
 
 api.post('/v1/assistant/parse', async c => {
@@ -160,21 +210,26 @@ api.post('/v1/assistant/transcribe', async c => {
 
 api.post('/v1/trips', async c => {
   const user = await requireRole(c.env,c.req.raw,['customer']); if (isResponse(user)) return user;
-  const input = await body<{ pickup: unknown; drop: unknown; vehicle: Vehicle; pickup_note?: string; confirmed?: boolean; via_assistant?: boolean }>(c.req.raw);
+  const input = await body<Record<string,unknown>>(c.req.raw);
   if (!input.confirmed) return error('Confirm the trip on screen before booking.', 'confirmation_required');
-  if (!validPoint(input.pickup) || !validPoint(input.drop) || !['Bike','Auto','Cab'].includes(input.vehicle)) return error('Choose a pickup, destination and vehicle.', 'invalid_trip');
+  const parsed=parseRideOptions(input);if('error' in parsed)return error(parsed.error,'invalid_trip');
+  const options=parsed.options;
   if (input.pickup_note !== undefined && (typeof input.pickup_note !== 'string' || input.pickup_note.trim().length > 160)) return error('Keep the pickup note under 160 characters.', 'invalid_pickup_note');
-  const direct = haversineKm(input.pickup,input.drop);
-  if (direct < 0.3) return error('Choose a destination at least 300 metres away.', 'too_close');
-  const route=await routeEstimate(c.env,input.pickup,input.drop,input.vehicle);
+  const route=await routeRide(c.env,options);
   const sql=db(c.env),km=route.km,minutes=route.minutes;
-  const [config] = await sql`select base,per_km,per_min,minimum from fare_config where vehicle_type=${input.vehicle}::vehicle_type`;
+  const [config] = await sql`select base,per_km,per_min,minimum from fare_config where vehicle_type=${options.vehicle}::vehicle_type`;
   const amount=fare({base:Number(config.base),per_km:Number(config.per_km),per_min:Number(config.per_min),minimum:Number(config.minimum)},km,minutes);
+  const promotion=await promotionForFare(c.env,options.promoCode,amount);
+  if(!promotion)return error('Promotion is unavailable or has expired.','invalid_promotion',409);
   const pin=randomDigits(4),pinHash=await hmac(c.env.SESSION_SECRET,pin);
   try {
-    const [trip]=await sql`insert into trips(customer_id,vehicle_type,pickup_lat,pickup_lng,pickup_text,pickup_note,drop_lat,drop_lng,drop_text,estimated_km,estimated_min,estimate_rupees,pin_hash,via_assistant)
-      values(${user.id}::uuid,${input.vehicle}::vehicle_type,${input.pickup.lat},${input.pickup.lng},${input.pickup.text.trim()},${input.pickup_note?.trim()||null},${input.drop.lat},${input.drop.lng},${input.drop.text.trim()},${km},${minutes},${amount},${pinHash},${!!input.via_assistant})
-      returning id,status,estimate_rupees,estimated_km,estimated_min`;
+    const [trip]=await sql`insert into trips(customer_id,vehicle_type,pickup_lat,pickup_lng,pickup_text,pickup_note,drop_lat,drop_lng,drop_text,estimated_km,estimated_min,estimate_rupees,pin_hash,via_assistant,
+      service_mode,stops,guest_name,guest_phone,promotion_id,promo_discount_rupees,customer_estimate_rupees)
+      values(${user.id}::uuid,${options.vehicle}::vehicle_type,${options.pickup.lat},${options.pickup.lng},${options.pickup.text.trim()},${(input.pickup_note as string|undefined)?.trim()||null},${options.drop.lat},${options.drop.lng},${options.drop.text.trim()},${km},${minutes},${amount},${pinHash},${!!input.via_assistant},
+      ${options.mode},${JSON.stringify(options.stops)}::jsonb,${options.guestName},${options.guestPhone},${promotion.promotion?.id||null}::uuid,${promotion.discount},${amount-promotion.discount})
+      returning id,status,estimate_rupees,customer_estimate_rupees,promo_discount_rupees,estimated_km,estimated_min`;
+    if(promotion.promotion&&promotion.discount>0)await sql`insert into promo_redemptions(promotion_id,trip_id,discount_rupees)
+      values(${promotion.promotion.id}::uuid,${trip.id}::uuid,${promotion.discount})`;
     await advanceMatch(c.env,trip.id);
     const room=c.env.TRIP_ROOM.get(c.env.TRIP_ROOM.idFromName(trip.id));
     await room.fetch('https://room.internal/schedule',{method:'POST',body:JSON.stringify({tripId:trip.id})});
@@ -183,6 +238,49 @@ api.post('/v1/trips', async c => {
     if (String(e).includes('customer_one_active_trip')) return error('You already have an active trip.', 'active_trip',409);
     throw e;
   }
+});
+
+api.post('/v1/scheduled',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['customer']);if(isResponse(user))return user;
+  const input=await body<Record<string,unknown>>(c.req.raw);
+  if(input.confirmed!==true)return error('Confirm the scheduled ride on screen.','confirmation_required');
+  const parsed=parseRideOptions(input);if('error' in parsed)return error(parsed.error,'invalid_trip');
+  const options=parsed.options;
+  if(options.promoCode)return error('Promotion codes are available for immediate rides only.','scheduled_promo',409);
+  if(input.pickup_note!==undefined&&(typeof input.pickup_note!=='string'||input.pickup_note.trim().length>160))
+    return error('Keep the pickup note under 160 characters.','invalid_pickup_note');
+  const scheduledFor=new Date(String(input.scheduled_for||''));
+  const delay=scheduledFor.getTime()-Date.now();
+  if(!Number.isFinite(delay)||delay<20*60_000||delay>7*24*60*60_000)
+    return error('Choose a pickup between 20 minutes and 7 days from now.','invalid_schedule');
+  const sql=db(c.env);
+  const [count]=await sql`select count(*)::int as total from scheduled_rides where customer_id=${user.id}::uuid and status='scheduled'`;
+  if(Number(count.total)>=3)return error('You can hold up to three scheduled rides.','schedule_limit',409);
+  const route=await routeRide(c.env,options);
+  const [config]=await sql`select base,per_km,per_min,minimum from fare_config where vehicle_type=${options.vehicle}::vehicle_type`;
+  const amount=fare({base:Number(config.base),per_km:Number(config.per_km),per_min:Number(config.per_min),minimum:Number(config.minimum)},route.km,route.minutes);
+  const pin=randomDigits(4),pinHash=await hmac(c.env.SESSION_SECRET,pin);
+  const request={...options,pickupNote:(input.pickup_note as string|undefined)?.trim()||null,viaAssistant:!!input.via_assistant};
+  const [scheduled]=await sql`insert into scheduled_rides(customer_id,request,scheduled_for,estimate_rupees,estimated_km,estimated_min,pin_hash)
+    values(${user.id}::uuid,${JSON.stringify(request)}::jsonb,${scheduledFor.toISOString()}::timestamptz,${amount},${route.km},${route.minutes},${pinHash})
+    returning id,scheduled_for,estimate_rupees,status`;
+  return c.json({scheduled,pin},201);
+});
+api.get('/v1/scheduled',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['customer']);if(isResponse(user))return user;
+  const rows=await db(c.env)`select id,scheduled_for,estimate_rupees,status,trip_id,
+    request->'pickup'->>'text' as pickup_text,request->'drop'->>'text' as drop_text,
+    request->>'vehicle' as vehicle_type,request->>'mode' as service_mode
+    from scheduled_rides where customer_id=${user.id}::uuid order by scheduled_for desc limit 20`;
+  return c.json({scheduled:rows});
+});
+api.post('/v1/scheduled/:id/cancel',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['customer']);if(isResponse(user))return user;
+  const id=c.req.param('id');if(!uuidOk(id))return error('Scheduled ride not found.','not_found',404);
+  const rows=await db(c.env)`update scheduled_rides set status='cancelled' where id=${id}::uuid and customer_id=${user.id}::uuid
+    and status='scheduled' returning id`;
+  if(!rows.length)return error('This scheduled ride cannot be cancelled here.','invalid_state',409);
+  return c.json({ok:true});
 });
 
 api.get('/v1/trips/active', async c => {
@@ -203,12 +301,16 @@ api.get('/v1/trips/:id', async c => {
   const user=await requireRole(c.env,c.req.raw,['customer','rider','super_admin','support_agent']);if(isResponse(user))return user;
   const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
   const [trip]=await db(c.env)`select t.id,t.customer_id,t.rider_id,t.status,t.vehicle_type,t.pickup_lat,t.pickup_lng,t.pickup_text,t.pickup_note,t.drop_lat,t.drop_lng,t.drop_text,
-    t.estimated_km,t.estimated_min,t.estimate_rupees,t.final_rupees,t.created_at,t.accepted_at,t.arrived_at,t.started_at,t.completed_at,
+    t.estimated_km,t.estimated_min,t.estimate_rupees,t.final_rupees,t.customer_estimate_rupees,t.customer_final_rupees,
+    t.promo_discount_rupees,t.service_mode,t.stops,t.next_stop_index,t.guest_name,
+    case when t.status in ('accepted','arrived','in_progress') then t.guest_phone end as guest_phone,
+    p.code as promotion_code,p.title as promotion_title,t.created_at,t.accepted_at,t.arrived_at,t.started_at,t.completed_at,
     ru.name as rider_name,case when t.status in ('accepted','arrived','in_progress') then ru.phone end as rider_phone,
-    cu.name as customer_name,case when t.status in ('accepted','arrived','in_progress') then cu.phone end as customer_phone,
+    cu.name as customer_name,case when t.status in ('accepted','arrived','in_progress') then coalesce(t.guest_phone,cu.phone) end as customer_phone,
     rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,rp.rating_avg,
     case when t.status='completed' and rp.upi_id <> '' then rp.upi_id end as rider_upi_id
     from trips t left join users ru on ru.id=t.rider_id left join users cu on cu.id=t.customer_id
+    left join promotions p on p.id=t.promotion_id
     left join rider_profiles rp on rp.user_id=t.rider_id where t.id=${id}::uuid`;
   if(!trip || (user.role==='customer'&&trip.customer_id!==user.id) || (user.role==='rider'&&trip.rider_id!==user.id))return error('Trip not found.','not_found',404);
   const [location]=await db(c.env)`select lat,lng,heading,recorded_at from trip_locations where trip_id=${id}::uuid order by recorded_at desc limit 1`;
@@ -227,14 +329,28 @@ api.get('/v1/trips/:id/driver-photo', async c => {
 api.get('/v1/trips/:id/route', async c => {
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
   const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
-  const [trip]=await db(c.env)`select rider_id,status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng from trips where id=${id}::uuid`;
+  const [trip]=await db(c.env)`select rider_id,status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng,stops,next_stop_index from trips where id=${id}::uuid`;
   if(!trip||trip.rider_id!==user.id||!['accepted','arrived','in_progress'].includes(trip.status))return error('Trip not found.','not_found',404);
   const origin={lat:Number(c.req.query('lat')),lng:Number(c.req.query('lng'))};
   if(!validPoint({...origin,text:'Current location'}))return error('Location is unavailable.','invalid_location');
+  const stops=Array.isArray(trip.stops)?trip.stops:[];
+  const nextStop=stops[Number(trip.next_stop_index)];
   const target=trip.status==='in_progress'
-    ? {lat:Number(trip.drop_lat),lng:Number(trip.drop_lng)}
+    ? nextStop?{lat:Number(nextStop.lat),lng:Number(nextStop.lng)}:{lat:Number(trip.drop_lat),lng:Number(trip.drop_lng)}
     : {lat:Number(trip.pickup_lat),lng:Number(trip.pickup_lng)};
-  return c.json({...(await routeEstimate(c.env,origin,target,trip.vehicle_type as Vehicle)),target});
+  return c.json({...(await routeEstimate(c.env,origin,target,trip.vehicle_type as Vehicle)),target,
+    stop_index:nextStop?Number(trip.next_stop_index):null,stop_label:nextStop?.text||null});
+});
+api.post('/v1/trips/:id/stops/arrive',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
+  const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
+  const [trip]=await db(c.env)`update trips set next_stop_index=next_stop_index+1
+    where id=${id}::uuid and rider_id=${user.id}::uuid and status='in_progress'
+      and next_stop_index<jsonb_array_length(stops)
+    returning next_stop_index,stops`;
+  if(!trip)return error('There is no next stop to mark.','invalid_state',409);
+  await broadcast(c.env,id,{status:'in_progress',next_stop_index:trip.next_stop_index});
+  return c.json({next_stop_index:trip.next_stop_index,remaining:(trip.stops as unknown[]).length-Number(trip.next_stop_index)});
 });
 api.get('/v1/trips/:id/share', async c => {
   const user=await requireRole(c.env,c.req.raw,['customer','rider']);if(isResponse(user))return user;
@@ -270,21 +386,38 @@ api.post('/v1/trips/:id/cancel', async c => {
   const id=c.req.param('id'),input=await body<{ reason?: string }>(c.req.raw);
   if(!uuidOk(id)||!input.reason?.trim())return error('Select a cancellation reason.','reason_required');
   const sql=db(c.env);
+  if(user.role==='rider'){
+    const [daily]=await sql`select count(*)::int as used from trips where rider_id=${user.id}::uuid
+      and cancelled_by=${user.id}::uuid and status='cancelled' and cancel_reason<>'Customer did not arrive'
+      and (updated_at at time zone 'Asia/Kolkata')::date=(now() at time zone 'Asia/Kolkata')::date`;
+    if(Number(daily.used)>=3)return error('You have used all three self-cancellations today. Contact support.','rider_cancel_limit',429);
+  }
   const changed=user.role==='customer'
     ? await sql`update trips set status='cancelled',cancelled_by=${user.id}::uuid,cancel_reason=${input.reason.slice(0,240)} where id=${id}::uuid and customer_id=${user.id}::uuid and status in ('searching','accepted','arrived') returning id`
     : await sql`update trips set status='cancelled',cancelled_by=${user.id}::uuid,cancel_reason=${input.reason.slice(0,240)} where id=${id}::uuid and rider_id=${user.id}::uuid and status in ('accepted','arrived') returning id`;
   if(!changed.length)return error('This trip cannot be cancelled here.','invalid_state',409);
   await broadcast(c.env,id,{status:'cancelled'});return c.json({ok:true});
 });
+api.get('/v1/rider/cancellations',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
+  const [daily]=await db(c.env)`select count(*)::int as used from trips where rider_id=${user.id}::uuid
+    and cancelled_by=${user.id}::uuid and status='cancelled' and cancel_reason<>'Customer did not arrive'
+    and (updated_at at time zone 'Asia/Kolkata')::date=(now() at time zone 'Asia/Kolkata')::date`;
+  const used=Number(daily.used);
+  return c.json({used,remaining:Math.max(0,3-used),limit:3,timezone:'Asia/Kolkata'});
+});
 
 api.get('/v1/rider/offers', async c => {
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
   const offers=await db(c.env)`select o.id,o.trip_id,o.expires_at,t.pickup_text,t.drop_text,t.estimated_km,t.estimate_rupees,
+    t.service_mode,t.stops,t.guest_name,t.promo_discount_rupees,t.customer_estimate_rupees,
     t.pickup_lat,t.pickup_lng,rp.last_lat,rp.last_lng
     from trip_offers o join trips t on t.id=o.trip_id join rider_profiles rp on rp.user_id=o.rider_id
     where o.rider_id=${user.id}::uuid and o.responded_at is null and o.expires_at>now() and t.status='searching' order by o.offered_at desc`;
   return c.json({offers:offers.map(o=>({id:o.id,trip_id:o.trip_id,expires_at:o.expires_at,pickup_text:o.pickup_text,
     drop_text:o.drop_text,estimated_km:o.estimated_km,estimate_rupees:o.estimate_rupees,
+    service_mode:o.service_mode,stops:o.stops,guest_name:o.guest_name,
+    promo_discount_rupees:o.promo_discount_rupees,customer_estimate_rupees:o.customer_estimate_rupees,
     pickup_distance_km:o.last_lat==null||o.last_lng==null?null:Math.round(haversineKm(
       {lat:Number(o.last_lat),lng:Number(o.last_lng)},{lat:Number(o.pickup_lat),lng:Number(o.pickup_lng)})*10)/10}))});
 });
@@ -341,16 +474,21 @@ api.post('/v1/trips/:id/complete',async c=>{
   const id=c.req.param('id'),input=await body<{final_km?:number}>(c.req.raw);
   if(!uuidOk(id))return error('Trip not found.','not_found',404);
   const sql=db(c.env);
-  const [trip]=await sql`select t.estimated_km,t.estimate_rupees,t.started_at,t.vehicle_type,f.base,f.per_km,f.per_min,f.minimum
+  const [trip]=await sql`select t.estimated_km,t.estimate_rupees,t.started_at,t.vehicle_type,t.promo_discount_rupees,
+    t.next_stop_index,jsonb_array_length(t.stops) as stop_count,f.base,f.per_km,f.per_min,f.minimum
     from trips t join fare_config f on f.vehicle_type=t.vehicle_type where t.id=${id}::uuid and t.rider_id=${user.id}::uuid and t.status='in_progress'`;
   if(!trip)return error('Trip is not in progress.','invalid_state',409);
+  if(Number(trip.next_stop_index)<Number(trip.stop_count))return error('Mark every extra stop before ending the trip.','stops_remaining',409);
   const km=Number.isFinite(input.final_km)&&Number(input.final_km)>0?Math.min(Number(input.final_km),Number(trip.estimated_km)*1.5):Number(trip.estimated_km);
   const minutes=Math.max(1,Math.round((Date.now()-new Date(trip.started_at).getTime())/60_000));
   const amount=Math.min(fare({base:Number(trip.base),per_km:Number(trip.per_km),per_min:Number(trip.per_min),minimum:Number(trip.minimum)},km,minutes),Math.round(Number(trip.estimate_rupees)*1.5));
-  const rows=await sql`update trips set status='completed',completed_at=now(),final_km=${km},duration_min=${minutes},final_rupees=${amount}
-    where id=${id}::uuid and rider_id=${user.id}::uuid and status='in_progress' returning id,final_rupees`;
+  const discount=Math.min(Number(trip.promo_discount_rupees||0),Math.max(0,amount-1));
+  const rows=await sql`update trips set status='completed',completed_at=now(),final_km=${km},duration_min=${minutes},final_rupees=${amount},
+    customer_final_rupees=${amount-discount}
+    where id=${id}::uuid and rider_id=${user.id}::uuid and status='in_progress'
+      and next_stop_index>=jsonb_array_length(stops) returning id,final_rupees,customer_final_rupees`;
   if(!rows.length)return error('Trip already ended.','invalid_state',409);
-  await broadcast(c.env,id,{status:'completed',final_rupees:amount});return c.json({trip:rows[0],payment:'cash_or_direct_upi'});
+  await broadcast(c.env,id,{status:'completed',final_rupees:amount,customer_final_rupees:amount-discount});return c.json({trip:rows[0],payment:'cash_or_direct_upi'});
 });
 api.post('/v1/trips/:id/location',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
@@ -453,7 +591,7 @@ api.post('/v1/tickets',async c=>{
 api.get('/v1/tickets/:id',async c=>{
   const user=await requireRole(c.env,c.req.raw,['customer','rider','super_admin','support_agent']);if(isResponse(user))return user;
   const id=c.req.param('id');if(!uuidOk(id))return error('Ticket not found.','not_found',404);
-  const [ticket]=await db(c.env)`select id,user_id,trip_id,subject,status,created_at from tickets where id=${id}::uuid`;
+  const [ticket]=await db(c.env)`select id,user_id,trip_id,subject,status,priority,category,assigned_to,resolution,created_at from tickets where id=${id}::uuid`;
   if(!ticket||(!['super_admin','support_agent'].includes(user.role)&&ticket.user_id!==user.id))return error('Ticket not found.','not_found',404);
   const messages=await db(c.env)`select author_id,body,created_at from ticket_messages where ticket_id=${id}::uuid order by created_at`;
   return c.json({ticket,messages});
@@ -473,6 +611,7 @@ api.get('/v1/rider/profile',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
   const [profile]=await db(c.env)`select rp.vehicle_type,rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,
     rp.licence_number,rp.insurance_expiry,rp.permit_expiry,rp.upi_id,rp.verification_status,rp.rejection_reason,rp.is_online,rp.rating_avg,u.phone,
+    rp.destination_filter_lat,rp.destination_filter_lng,rp.destination_filter_text,
     rp.licence_key is not null as licence_uploaded,rp.rc_key is not null as rc_uploaded,rp.selfie_key is not null as selfie_uploaded,
     rp.insurance_key is not null as insurance_uploaded,rp.permit_key is not null as permit_uploaded,
     (u.phone is not null and rp.vehicle_type is not null and rp.vehicle_number is not null and rp.vehicle_make is not null
@@ -481,6 +620,17 @@ api.get('/v1/rider/profile',async c=>{
       and rp.insurance_expiry>=current_date and (rp.vehicle_type='Bike' or (rp.permit_key is not null and rp.permit_expiry>=current_date))) as registration_complete
     from rider_profiles rp join users u on u.id=rp.user_id where rp.user_id=${user.id}::uuid`;
   return c.json({profile:profile||null});
+});
+api.patch('/v1/rider/destination-filter',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
+  const input=await body<{destination?:unknown}>(c.req.raw);
+  if(input.destination!==null&&!validPoint(input.destination))return error('Choose a destination or clear the filter.','invalid_destination');
+  const destination=input.destination as {lat:number;lng:number;text:string}|null;
+  const [profile]=await db(c.env)`update rider_profiles set destination_filter_lat=${destination?.lat??null},
+    destination_filter_lng=${destination?.lng??null},destination_filter_text=${destination?.text??null}
+    where user_id=${user.id}::uuid returning destination_filter_lat,destination_filter_lng,destination_filter_text`;
+  if(!profile)return error('Complete rider registration first.','profile_required',409);
+  return c.json({destination:profile.destination_filter_text?profile:null});
 });
 api.patch('/v1/rider/profile',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
@@ -699,6 +849,23 @@ api.get('/v1/admin/trips',async c=>{
     order by t.created_at desc limit 100`;
   return c.json({trips:rows});
 });
+api.get('/v1/admin/scheduled',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
+  const rides=await db(c.env)`select s.id,s.status,s.scheduled_for,s.estimate_rupees,s.trip_id,
+    s.request->'pickup'->>'text' as pickup_text,s.request->'drop'->>'text' as drop_text,
+    s.request->>'vehicle' as vehicle_type,u.email as customer_email
+    from scheduled_rides s join users u on u.id=s.customer_id order by s.scheduled_for desc limit 100`;
+  return c.json({scheduled:rides});
+});
+api.post('/v1/admin/scheduled/:id/cancel',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
+  const id=c.req.param('id'),input=await body<{reason?:string}>(c.req.raw);
+  if(!uuidOk(id)||!input.reason?.trim())return error('Add a cancellation reason.','reason_required');
+  const rows=await db(c.env)`update scheduled_rides set status='cancelled' where id=${id}::uuid and status='scheduled' returning id`;
+  if(!rows.length)return error('Scheduled ride is already active or ended.','invalid_state',409);
+  await audit(c.env,user,'cancel_scheduled',id,{reason:input.reason.slice(0,240)},c.req.raw);
+  return c.json({ok:true});
+});
 api.post('/v1/admin/trips/:id/cancel',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
   const id=c.req.param('id'),input=await body<{reason?:string}>(c.req.raw);
@@ -712,7 +879,11 @@ api.post('/v1/admin/trips/:id/cancel',async c=>{
 api.get('/v1/admin/users',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
   const q=(c.req.query('q')||'').trim();
-  const users=await db(c.env)`select id,email,phone,name,role,is_blocked,created_at from users
+  const users=await db(c.env)`select id,email,phone,name,role,is_blocked,created_at,
+    (select count(*)::int from trips t where t.rider_id=users.id and t.cancelled_by=users.id
+      and t.status='cancelled' and t.cancel_reason<>'Customer did not arrive'
+      and (t.updated_at at time zone 'Asia/Kolkata')::date=(now() at time zone 'Asia/Kolkata')::date) as rider_cancels_today
+    from users
     where ${q}='' or email ilike ${`%${q}%`} or phone ilike ${`%${q}%`} or id::text ilike ${`%${q}%`}
     order by created_at desc limit 100`;
   return c.json({users});
@@ -743,15 +914,37 @@ api.get('/v1/admin/notes/:type/:id',async c=>{
 });
 api.get('/v1/admin/tickets',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
-  return c.json({tickets:await db(c.env)`select t.id,t.subject,t.status,t.created_at,u.email from tickets t left join users u on u.id=t.user_id order by t.created_at desc limit 100`});
+  return c.json({tickets:await db(c.env)`select t.id,t.trip_id,t.subject,t.status,t.priority,t.category,t.assigned_to,
+    t.created_at,u.email,a.email as assigned_email from tickets t left join users u on u.id=t.user_id
+    left join users a on a.id=t.assigned_to
+    order by case when t.status='resolved' then 1 else 0 end,
+      case t.priority when 'urgent' then 0 when 'high' then 1 else 2 end,t.created_at desc limit 100`});
 });
 api.patch('/v1/admin/tickets/:id',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
-  const id=c.req.param('id'),input=await body<{status?:string}>(c.req.raw);
-  if(!uuidOk(id)||!['open','in_progress','resolved'].includes(input.status||''))return error('Choose a ticket status.','invalid_status');
-  const rows=await db(c.env)`update tickets set status=${input.status}::ticket_status where id=${id}::uuid returning id`;
+  const id=c.req.param('id'),input=await body<{status?:string;priority?:string;category?:string;assigned_to?:string|null;resolution?:string}>(c.req.raw);
+  if(!uuidOk(id)||
+    (input.status!==undefined&&!['open','in_progress','resolved'].includes(input.status))||
+    (input.priority!==undefined&&!['normal','high','urgent'].includes(input.priority))||
+    (input.category!==undefined&&!['general','safety','payment','driver','trip','account'].includes(input.category))||
+    (input.assigned_to!==undefined&&input.assigned_to!==null&&!uuidOk(input.assigned_to))||
+    (input.resolution!==undefined&&(typeof input.resolution!=='string'||input.resolution.length>1000)))
+    return error('Choose valid support fields.','invalid_ticket');
+  if(!Object.keys(input).some(k=>['status','priority','category','assigned_to','resolution'].includes(k)))return error('Choose a support change.','invalid_ticket');
+  if(input.assigned_to){const [agent]=await db(c.env)`select id from users where id=${input.assigned_to}::uuid and role in ('super_admin','support_agent') and not is_blocked`;
+    if(!agent)return error('Choose an active admin or support agent.','invalid_agent');}
+  const rows=await db(c.env)`update tickets set status=coalesce(${input.status??null}::ticket_status,status),
+    priority=coalesce(${input.priority??null},priority),category=coalesce(${input.category??null},category),
+    assigned_to=case when ${input.assigned_to!==undefined} then ${input.assigned_to??null}::uuid else assigned_to end,
+    resolution=case when ${input.resolution!==undefined} then ${input.resolution??null} else resolution end
+    where id=${id}::uuid returning id,status,priority,category,assigned_to,resolution`;
   if(!rows.length)return error('Ticket not found.','not_found',404);
-  await audit(c.env,user,'ticket_status',id,{status:input.status},c.req.raw);return c.json({ok:true});
+  await audit(c.env,user,'ticket_triage',id,input,c.req.raw);return c.json({ticket:rows[0]});
+});
+api.get('/v1/admin/agents',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
+  const agents=await db(c.env)`select id,email,role from users where role in ('super_admin','support_agent') and not is_blocked and deleted_at is null order by email`;
+  return c.json({agents});
 });
 api.get('/v1/admin/fares',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
@@ -766,6 +959,67 @@ api.patch('/v1/admin/fares/:vehicle',async c=>{
     where vehicle_type=${vehicle}::vehicle_type returning vehicle_type,base,per_km,per_min,minimum`;
   await audit(c.env,user,'fare_update',vehicle,{fare:fareRow,reason:input.reason},c.req.raw);
   return c.json({fare:fareRow});
+});
+api.get('/v1/admin/promotions',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
+  const promotions=await db(c.env)`select p.id,p.code,p.title,p.discount_type,p.amount,p.max_discount,p.max_redemptions,
+    p.starts_at,p.ends_at,p.active,p.created_at,
+    (select count(*)::int from promo_redemptions pr join trips t on t.id=pr.trip_id
+      where pr.promotion_id=p.id and t.status not in ('cancelled','no_riders_found')) as redemptions
+    from promotions p order by p.created_at desc limit 100`;
+  return c.json({promotions});
+});
+api.post('/v1/admin/promotions',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin']);if(isResponse(user))return user;
+  const input=await body<{code?:string;title?:string;discount_type?:string;amount?:number;max_discount?:number;
+    max_redemptions?:number;starts_at?:string;ends_at?:string}>(c.req.raw);
+  const code=input.code?.trim().toUpperCase(),title=input.title?.trim();
+  const start=new Date(input.starts_at||''),end=new Date(input.ends_at||'');
+  if(!code||!/^[A-Z0-9_-]{4,20}$/.test(code)||!title||title.length<3||title.length>100||
+    !['flat','percent'].includes(input.discount_type||'')||!Number.isInteger(input.amount)||input.amount!<1||
+    input.amount!>(input.discount_type==='percent'?80:1000)||!Number.isInteger(input.max_discount)||
+    input.max_discount!<1||input.max_discount!>1000||!Number.isInteger(input.max_redemptions)||
+    input.max_redemptions!<1||input.max_redemptions!>10000||!Number.isFinite(start.getTime())||
+    !Number.isFinite(end.getTime())||end<=start||end.getTime()-start.getTime()>90*24*60*60_000)
+    return error('Enter a valid code, discount, redemption limit and date window.','invalid_promotion');
+  try{
+    const [promotion]=await db(c.env)`insert into promotions(code,title,discount_type,amount,max_discount,max_redemptions,starts_at,ends_at,created_by)
+      values(${code},${title},${input.discount_type},${input.amount!},${input.max_discount!},${input.max_redemptions!},
+        ${start.toISOString()}::timestamptz,${end.toISOString()}::timestamptz,${user.id}::uuid)
+      returning id,code,title,active`;
+    await audit(c.env,user,'create_promotion',promotion.id,{code,title},c.req.raw);
+    return c.json({promotion},201);
+  }catch(e){if(String(e).includes('promotions_code_key'))return error('That promotion code already exists.','code_used',409);throw e;}
+});
+api.patch('/v1/admin/promotions/:id',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin']);if(isResponse(user))return user;
+  const id=c.req.param('id'),input=await body<{active?:boolean;reason?:string}>(c.req.raw);
+  if(!uuidOk(id)||typeof input.active!=='boolean'||!input.reason?.trim())return error('Choose a state and give a reason.','invalid_promotion');
+  const [promotion]=await db(c.env)`update promotions set active=${input.active} where id=${id}::uuid returning id,code,active`;
+  if(!promotion)return error('Promotion not found.','not_found',404);
+  await audit(c.env,user,'promotion_state',id,{active:input.active,reason:input.reason.slice(0,240)},c.req.raw);
+  return c.json({promotion});
+});
+api.get('/v1/admin/promo-redemptions',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
+  const redemptions=await db(c.env)`select pr.id,pr.trip_id,pr.discount_rupees,pr.subsidy_status,pr.settled_at,
+    p.code,t.status as trip_status,t.final_rupees,t.customer_final_rupees,
+    cu.email as customer_email,ru.email as rider_email,pr.created_at
+    from promo_redemptions pr join promotions p on p.id=pr.promotion_id join trips t on t.id=pr.trip_id
+    left join users cu on cu.id=t.customer_id left join users ru on ru.id=t.rider_id
+    order by pr.created_at desc limit 100`;
+  return c.json({redemptions});
+});
+api.post('/v1/admin/promo-redemptions/:id/settle',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin']);if(isResponse(user))return user;
+  const id=c.req.param('id'),input=await body<{reason?:string}>(c.req.raw);
+  if(!uuidOk(id)||!input.reason?.trim())return error('Record how the rider subsidy was settled.','reason_required');
+  const [row]=await db(c.env)`update promo_redemptions pr set subsidy_status='settled',settled_by=${user.id}::uuid,settled_at=now()
+    from trips t where pr.id=${id}::uuid and t.id=pr.trip_id and t.status='completed' and pr.subsidy_status='pending'
+    returning pr.id,pr.trip_id,pr.discount_rupees`;
+  if(!row)return error('Only a completed, pending subsidy can be marked settled.','invalid_state',409);
+  await audit(c.env,user,'settle_promo_subsidy',row.trip_id,{redemption_id:id,amount:row.discount_rupees,reason:input.reason.slice(0,240)},c.req.raw);
+  return c.json({ok:true});
 });
 api.get('/v1/admin/audit',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin']);if(isResponse(user))return user;
@@ -784,6 +1038,11 @@ export default {
   async scheduled(event:ScheduledEvent,env:Env,ctx:ExecutionContext){
     const sql=db(env);
     if(event.cron==='* * * * *'){
+      await sql`update scheduled_rides set status='expired' where status='scheduled'
+        and scheduled_for<now()-interval '30 minutes'`;
+      const scheduled=await sql`select id from scheduled_rides where status='scheduled'
+        and scheduled_for<=now()+interval '10 minutes' order by scheduled_for limit 40`;
+      for(const ride of scheduled)ctx.waitUntil(activateScheduledRide(env,ride.id));
       const trips=await sql`select id from trips where status='searching' and search_deadline<now() limit 100`;
       for(const trip of trips)ctx.waitUntil(advanceMatch(env,trip.id));
     }else{
