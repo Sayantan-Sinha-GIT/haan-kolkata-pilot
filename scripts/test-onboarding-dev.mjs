@@ -11,6 +11,8 @@ const [admin]=await sql`insert into users(email,role,name) values('qa-admin@haan
 await sql`insert into admin_activity(user_id,last_seen_at) values(${admin.id}::uuid,now()) on conflict(user_id) do update set last_seen_at=now()`;
 const [rider]=await sql`select id,role from users where email='rider.demo@haan.invalid' and role='rider'`;
 if(!rider)throw Error('Development rider fixture missing');
+await sql`update rider_profiles set licence_key=null,rc_key=null,selfie_key=null,insurance_key=null,permit_key=null,
+  verification_status='pending',is_online=false where user_id=${rider.id}::uuid`;
 const token=user=>{const body=Buffer.from(JSON.stringify({sub:user.id,role:user.role,exp:Math.floor(Date.now()/1000)+900})).toString('base64url');return `${body}.${createHmac('sha256',vars.SESSION_SECRET).update(body).digest('hex')}`};
 const riderToken=token(rider),adminToken=token(admin);
 let count=0;
@@ -48,4 +50,8 @@ for(const kind of ['licence','rc','selfie','insurance'])check(`auto ${kind} uplo
 check('auto approval needs permit',await call(`/v1/admin/riders/${auto.id}/verify`,'POST',{decision:'approved'},adminToken),409);
 check('auto permit uploaded',await call('/v1/rider/documents/permit','POST',image,autoToken,'image/webp'),200);
 check('auto approval succeeds',await call(`/v1/admin/riders/${auto.id}/verify`,'POST',{decision:'approved'},adminToken),200);
+check('plate edit requires new review',await call('/v1/rider/profile','PATCH',{...autoProfile,vehicle_number:'WB 02 CD 5679'},autoToken),200);
+check('old RC no longer counts',await call('/v1/rider/profile','GET',undefined,autoToken),200,
+  d=>d.profile.rc_uploaded===false&&d.profile.registration_complete===false&&d.profile.verification_status==='pending');
+check('edited plate cannot go online',await call('/v1/rider/online','POST',{online:true,lat:22.5726,lng:88.3639},autoToken),403);
 console.log(`PASS ${count} onboarding checks`);

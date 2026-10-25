@@ -9,7 +9,7 @@ const sql = neon(vars.DATABASE_URL);
 const [rider] = await sql`select u.id,u.role from users u join rider_profiles rp on rp.user_id=u.id where u.email='rider.demo@haan.invalid' and rp.verification_status='approved'`;
 if (!rider) throw new Error('Development fixture missing; refusing test writes');
 const email = `qa-${randomUUID()}@haan.invalid`;
-const [customer] = await sql`insert into users(email,role,name) values(${email},'customer','QA customer') returning id,role`;
+const [customer] = await sql`insert into users(email,role,name,phone) values(${email},'customer','QA customer','9123456789') returning id,role`;
 const token = user => {
   const payload = Buffer.from(JSON.stringify({ sub: user.id, role: user.role, exp: Math.floor(Date.now()/1000)+900 })).toString('base64url');
   return `${payload}.${createHmac('sha256',vars.SESSION_SECRET).update(payload).digest('hex')}`;
@@ -51,10 +51,15 @@ try {
   await expectStatus('offer accepted', await call(`/v1/rider/offers/${offer.id}/accept`,'POST',{},riderToken),200);
   await expectStatus('matched identity and pickup note visible',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,
     d=>d.trip.pickup_note==='Meet by the north gate'&&d.trip.vehicle_number==='WB12AB1234'&&d.trip.vehicle_make==='Hero'&&d.trip.rider_phone==='9876543210');
+  await expectStatus('assigned driver can call customer',await call(`/v1/trips/${id}`,'GET',undefined,riderToken),200,d=>d.trip.customer_phone==='9123456789');
   const photo=async auth=>{const r=await fetch(`${base}/v1/trips/${id}/driver-photo`,{headers:auth?{Authorization:`Bearer ${auth}`}:{}});return {status:r.status,type:r.headers.get('content-type'),size:(await r.arrayBuffer()).byteLength}};
   const ownPhoto=await photo(customerToken);if(ownPhoto.status!==200||!ownPhoto.type?.startsWith('image/')||ownPhoto.size<1000)throw Error('Matched customer photo unavailable');checks++;console.log('PASS matched customer sees photo');
   const riderPhoto=await photo(riderToken);if(riderPhoto.status!==403)throw Error('Rider photo authorization failed');checks++;console.log('PASS rider cannot fetch customer-only photo');
   const anonymousPhoto=await photo();if(anonymousPhoto.status!==401)throw Error('Anonymous photo authorization failed');checks++;console.log('PASS anonymous photo denied');
+  const [other]=await sql`insert into users(email,role,name) values(${`qa-other-${randomUUID()}@haan.invalid`},'customer','QA outsider') returning id,role`;
+  const otherToken=token(other),otherPhoto=await photo(otherToken);
+  if(otherPhoto.status!==404)throw Error('Unassigned customer photo authorization failed');checks++;console.log('PASS unassigned customer photo denied');
+  await call('/v1/profile','DELETE',undefined,otherToken);
   await expectStatus('route targets pickup before PIN',await call(`/v1/trips/${id}/route?lat=22.5726&lng=88.3639`,'GET',undefined,riderToken),200,d=>Number(d.target.lat)===pickup.lat);
   await expectStatus('double accept denied', await call(`/v1/rider/offers/${offer.id}/accept`,'POST',{},riderToken),409);
   await expectStatus('PIN before arrival denied', await call(`/v1/trips/${id}/start`,'POST',{pin:created.pin},riderToken),409);

@@ -453,14 +453,20 @@ class _RideHomeState extends State<RideHome> {
   @override
   Widget build(BuildContext context) {
     final status = '${trip?['status'] ?? ''}';
+    final approaching = status == 'accepted' || status == 'arrived';
+    final List<LatLng>? activeRoute = approaching && rider != null
+        ? [rider!, pickup]
+        : status == 'in_progress' && rider != null && drop != null
+            ? [rider!, drop!]
+            : routePoints;
     return Stack(children: [
       Positioned.fill(
           child: HaanMap(
               center: center,
               pickup: pickup,
-              drop: drop,
+              drop: approaching ? null : drop,
               rider: rider,
-              routePoints: routePoints,
+              routePoints: activeRoute,
               onTap: trip == null
                   ? (p) => setState(() {
                         drop = p;
