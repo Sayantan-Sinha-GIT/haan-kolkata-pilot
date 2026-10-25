@@ -110,6 +110,16 @@ class _SignInState extends State<SignIn> {
     }
   }
 
+  Future<void> googleSubmit() async {
+    setState(() {busy=true;error=null;});
+    try { await app.googleLogin(); }
+    on ApiException catch(e){if(mounted)setState(()=>error=e.message);}
+    catch(_){if(mounted)setState(()=>error=app.language=='hi'
+        ? 'Google से साइन इन नहीं हो सका। ईमेल कोड आज़माएँ।'
+        : 'Google sign-in could not finish. Try the email code.');}
+    finally{if(mounted)setState(()=>busy=false);}
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
       body: SafeArea(
@@ -152,6 +162,11 @@ class _SignInState extends State<SignIn> {
                                 ? app.tr('verify')
                                 : app.tr('sendCode'),
                         onPressed: busy ? null : submit),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                        onPressed: busy ? null : googleSubmit,
+                        icon: const Icon(Icons.account_circle_outlined),
+                        label: Text(app.language=='hi'?'Google से आगे बढ़ें':'Continue with Google')),
                     if (sent)
                       TextButton(
                           onPressed: busy
@@ -1264,8 +1279,8 @@ class _ReceiptPageState extends State<ReceiptPage> {
               const SizedBox(height: 20),
               if((trip!['promo_discount_rupees'] as num?)?.toInt()!=0)
                 Text(app.language=='hi'
-                  ? 'प्रोमो छूट ₹${trip!['promo_discount_rupees']}। ड्राइवर को बाकी राशि Haan ऑपरेटर अलग से देगा; ऐप भुगतान की पुष्टि नहीं करता।'
-                  : 'Promotion discount ₹${trip!['promo_discount_rupees']}. The operator must settle that difference with the driver separately; the app cannot verify payment.'),
+                  ? 'प्रोमो छूट ₹${trip!['promo_discount_rupees']}। Haan ड्राइवर की कमाई अलग से समायोजित करेगा; ऐप भुगतान की पुष्टि नहीं करता।'
+                  : 'Promotion discount ₹${trip!['promo_discount_rupees']}. Haan adjusts the rider’s earnings separately; the app cannot verify payment.'),
               Builder(builder:(context){
                 final amount=(trip!['customer_final_rupees'] as num?)?.toInt()
                   ??(trip!['customer_estimate_rupees'] as num?)?.toInt()

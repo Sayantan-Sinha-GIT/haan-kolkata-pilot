@@ -7,6 +7,8 @@ import { advanceMatch } from './matching';
 import { assistantIntent, broadcast, routeEstimate, searchPlaces, sendEmail, transcribe, TripRoom } from './services';
 import { sendPush } from './push';
 import { parseRideOptions, routeRide, promotionDiscount, type RideOptions } from './ride_features';
+import { verifyGoogleFirebaseToken } from './google_auth';
+import { settlementForFare } from './settlement';
 import type { App, Env, Principal } from './types';
 
 export { TripRoom };
@@ -134,6 +136,21 @@ api.post('/v1/auth/verify-otp', async c => {
   const user = users[0] as Principal;
   if (user.role !== input.role || user.is_blocked) return error('This account cannot sign in here.', 'role_mismatch', 403);
   return c.json(await issueTokens(c.env, user, input.device || 'Android'));
+});
+
+api.post('/v1/auth/google', async c => {
+  const input = await body<{ id_token?: string; role?: 'customer'|'rider'; device?: string }>(c.req.raw);
+  if (typeof input.id_token !== 'string' || !['customer','rider'].includes(input.role || ''))
+    return error('Google sign-in could not be verified.', 'invalid_google_login');
+  if (!await consumeLimit(c.env, `google:ip:${ip(c.req.raw)}`, 20, 60))
+    return error('Please try again later.', 'rate_limited', 429);
+  const identity = await verifyGoogleFirebaseToken(input.id_token, c.env.FIREBASE_PROJECT_ID || '');
+  if (!identity || !emailOk(identity.email)) return error('Google sign-in could not be verified.', 'invalid_google_token', 401);
+  const [user] = await db(c.env)`insert into users(email,role) values(${identity.email},${input.role}::user_role)
+    on conflict(email) do update set updated_at=now() returning id,role,email,is_blocked,deleted_at`;
+  if (user.role !== input.role || user.is_blocked || user.deleted_at)
+    return error('This account cannot sign in here.', 'role_mismatch', 403);
+  return c.json(await issueTokens(c.env,user as Principal,input.device || 'Android Google'));
 });
 
 api.post('/v1/auth/refresh', async c => {
@@ -311,8 +328,13 @@ api.get('/v1/trips/active', async c => {
 api.get('/v1/trips/history', async c => {
   const user=await requireRole(c.env,c.req.raw,['customer','rider']);if(isResponse(user))return user;
   const rows=user.role==='customer'
-    ? await db(c.env)`select id,status,vehicle_type,pickup_text,drop_text,estimate_rupees,final_rupees,created_at,completed_at from trips where customer_id=${user.id}::uuid order by created_at desc limit 50`
-    : await db(c.env)`select id,status,vehicle_type,pickup_text,drop_text,estimate_rupees,final_rupees,created_at,completed_at from trips where rider_id=${user.id}::uuid order by created_at desc limit 50`;
+    ? await db(c.env)`select t.id,t.status,t.vehicle_type,t.pickup_text,t.drop_text,t.estimate_rupees,
+        t.final_rupees,t.customer_final_rupees,t.created_at,t.completed_at
+        from trips t where t.customer_id=${user.id}::uuid order by t.created_at desc limit 50`
+    : await db(c.env)`select t.id,t.status,t.vehicle_type,t.pickup_text,t.drop_text,t.estimate_rupees,
+        t.final_rupees,s.rider_earnings_rupees,t.created_at,t.completed_at
+        from trips t left join trip_settlements s on s.trip_id=t.id
+        where t.rider_id=${user.id}::uuid order by t.created_at desc limit 50`;
   return c.json({ trips:rows });
 });
 api.get('/v1/trips/:id', async c => {
@@ -321,6 +343,8 @@ api.get('/v1/trips/:id', async c => {
   const [trip]=await db(c.env)`select t.id,t.customer_id,t.rider_id,t.status,t.vehicle_type,t.pickup_lat,t.pickup_lng,t.pickup_text,t.pickup_note,t.drop_lat,t.drop_lng,t.drop_text,
     t.estimated_km,t.estimated_min,t.estimate_rupees,t.final_rupees,t.customer_estimate_rupees,t.customer_final_rupees,
     t.promo_discount_rupees,t.service_mode,t.stops,t.next_stop_index,t.guest_name,
+    ts.platform_fee_rupees,ts.rider_earnings_rupees,ts.promotion_topup_rupees,
+    ts.net_due_to_platform_rupees,ts.status as settlement_status,
     case when t.status in ('accepted','arrived','in_progress') then t.guest_phone end as guest_phone,
     p.code as promotion_code,p.title as promotion_title,t.created_at,t.accepted_at,t.arrived_at,t.started_at,t.completed_at,
     ru.name as rider_name,case when t.status in ('accepted','arrived','in_progress') then ru.phone end as rider_phone,
@@ -328,6 +352,7 @@ api.get('/v1/trips/:id', async c => {
     rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,rp.rating_avg,
     case when t.status='completed' and rp.upi_id <> '' then rp.upi_id end as rider_upi_id
     from trips t left join users ru on ru.id=t.rider_id left join users cu on cu.id=t.customer_id
+    left join trip_settlements ts on ts.trip_id=t.id
     left join promotions p on p.id=t.promotion_id
     left join rider_profiles rp on rp.user_id=t.rider_id where t.id=${id}::uuid`;
   if(!trip || (user.role==='customer'&&trip.customer_id!==user.id) || (user.role==='rider'&&trip.rider_id!==user.id))return error('Trip not found.','not_found',404);
@@ -501,9 +526,11 @@ api.post('/v1/trips/:id/complete',async c=>{
   const minutes=Math.max(1,Math.round((Date.now()-new Date(trip.started_at).getTime())/60_000));
   const amount=Math.min(fare({base:Number(trip.base),per_km:Number(trip.per_km),per_min:Number(trip.per_min),minimum:Number(trip.minimum)},km,minutes),Math.round(Number(trip.estimate_rupees)*1.5));
   const discount=Math.min(Number(trip.promo_discount_rupees||0),Math.max(0,amount-1));
+  const customerDue=amount-discount;
+  const split=settlementForFare(amount,customerDue);
   const rows=await sql`with updated_trip as (
     update trips set status='completed',completed_at=now(),final_km=${km},duration_min=${minutes},
-      final_rupees=${amount},customer_final_rupees=${amount-discount}
+      final_rupees=${amount},customer_final_rupees=${customerDue}
     where id=${id}::uuid and rider_id=${user.id}::uuid and status='in_progress'
       and next_stop_index>=jsonb_array_length(stops)
     returning id,final_rupees,customer_final_rupees
@@ -511,9 +538,20 @@ api.post('/v1/trips/:id/complete',async c=>{
     update promo_redemptions set discount_rupees=${discount}
     where trip_id in (select id from updated_trip)
     returning id
-  ) select id,final_rupees,customer_final_rupees from updated_trip`;
+  ), inserted_settlement as (
+    insert into trip_settlements(trip_id,customer_due_rupees,platform_fee_rupees,
+      rider_earnings_rupees,promotion_topup_rupees,net_due_to_platform_rupees)
+    select id,${customerDue},${split.platformFee},${split.riderEarnings},
+      ${split.promotionTopup},${split.netDueToPlatform} from updated_trip
+    returning trip_id
+  ) select u.id,u.final_rupees,u.customer_final_rupees,
+    ${split.platformFee}::int as platform_fee_rupees,
+    ${split.riderEarnings}::int as rider_earnings_rupees,
+    ${split.promotionTopup}::int as promotion_topup_rupees,
+    ${split.netDueToPlatform}::int as net_due_to_platform_rupees
+    from updated_trip u join inserted_settlement s on s.trip_id=u.id`;
   if(!rows.length)return error('Trip already ended.','invalid_state',409);
-  await broadcast(c.env,id,{status:'completed',final_rupees:amount,customer_final_rupees:amount-discount});return c.json({trip:rows[0],payment:'cash_or_direct_upi'});
+  await broadcast(c.env,id,{status:'completed',final_rupees:amount,customer_final_rupees:customerDue});return c.json({trip:rows[0],payment:'cash_or_direct_upi'});
 });
 api.post('/v1/trips/:id/location',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
@@ -755,10 +793,12 @@ api.post('/v1/rider/heartbeat',async c=>{
 });
 api.get('/v1/rider/earnings',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
-  const [totals]=await db(c.env)`select coalesce(sum(final_rupees) filter(where completed_at>=date_trunc('day',now())),0)::int as today,
-    coalesce(sum(final_rupees) filter(where completed_at>=date_trunc('week',now())),0)::int as week,
-    count(*) filter(where completed_at>=date_trunc('day',now()))::int as trips_today
-    from trips where rider_id=${user.id}::uuid and status='completed'`;
+  const [totals]=await db(c.env)`select coalesce(sum(s.rider_earnings_rupees) filter(where t.completed_at>=date_trunc('day',now())),0)::int as today,
+    coalesce(sum(s.rider_earnings_rupees) filter(where t.completed_at>=date_trunc('week',now())),0)::int as week,
+    coalesce(sum(s.platform_fee_rupees) filter(where t.completed_at>=date_trunc('day',now())),0)::int as today_platform_fee,
+    coalesce(sum(s.net_due_to_platform_rupees) filter(where s.status='pending'),0)::int as pending_net_due_to_platform,
+    count(*) filter(where t.completed_at>=date_trunc('day',now()))::int as trips_today
+    from trips t join trip_settlements s on s.trip_id=t.id where t.rider_id=${user.id}::uuid and t.status='completed'`;
   return c.json({earnings:totals});
 });
 
@@ -1036,12 +1076,49 @@ api.get('/v1/admin/promo-redemptions',async c=>{
 api.post('/v1/admin/promo-redemptions/:id/settle',async c=>{
   const user=await requireRole(c.env,c.req.raw,['super_admin']);if(isResponse(user))return user;
   const id=c.req.param('id'),input=await body<{reason?:string}>(c.req.raw);
-  if(!uuidOk(id)||!input.reason?.trim())return error('Record how the rider subsidy was settled.','reason_required');
-  const [row]=await db(c.env)`update promo_redemptions pr set subsidy_status='settled',settled_by=${user.id}::uuid,settled_at=now()
-    from trips t where pr.id=${id}::uuid and t.id=pr.trip_id and t.status='completed' and pr.subsidy_status='pending'
-    returning pr.id,pr.trip_id,pr.discount_rupees`;
-  if(!row)return error('Only a completed, pending subsidy can be marked settled.','invalid_state',409);
-  await audit(c.env,user,'settle_promo_subsidy',row.trip_id,{redemption_id:id,amount:row.discount_rupees,reason:input.reason.slice(0,240)},c.req.raw);
+  if(!uuidOk(id)||!input.reason?.trim()||input.reason.trim().length>240)return error('Record the external settlement reference or reason.','reason_required');
+  const [row]=await db(c.env)`with updated as (
+    update trip_settlements set status='settled',settled_by=${user.id}::uuid,
+      settled_at=now(),settlement_note=${input.reason.trim()}
+    where trip_id=(select trip_id from promo_redemptions where id=${id}::uuid) and status='pending'
+    returning trip_id,net_due_to_platform_rupees
+  ), redemption as (
+    update promo_redemptions set subsidy_status='settled',settled_by=${user.id}::uuid,settled_at=now()
+    where id=${id}::uuid and trip_id in (select trip_id from updated)
+    returning id
+  ) select u.trip_id,u.net_due_to_platform_rupees from updated u join redemption r on true`;
+  if(!row)return error('Only a completed, pending trip settlement can be marked settled.','invalid_state',409);
+  await audit(c.env,user,'settle_trip',row.trip_id,{redemption_id:id,net_due_to_platform_rupees:row.net_due_to_platform_rupees,reason:input.reason.trim()},c.req.raw);
+  return c.json({ok:true});
+});
+api.get('/v1/admin/settlements',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin','support_agent']);if(isResponse(user))return user;
+  const settlements=await db(c.env)`select s.trip_id,s.customer_due_rupees,s.platform_fee_rupees,
+    s.rider_earnings_rupees,s.promotion_topup_rupees,s.net_due_to_platform_rupees,
+    s.status,s.settled_at,s.settlement_note,s.created_at,
+    t.final_rupees,cu.email as customer_email,ru.email as rider_email,p.code as promotion_code
+    from trip_settlements s join trips t on t.id=s.trip_id
+    left join users cu on cu.id=t.customer_id left join users ru on ru.id=t.rider_id
+    left join promotions p on p.id=t.promotion_id order by s.created_at desc limit 100`;
+  return c.json({settlements});
+});
+api.post('/v1/admin/settlements/:id/settle',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['super_admin']);if(isResponse(user))return user;
+  const id=c.req.param('id'),input=await body<{reason?:string}>(c.req.raw);
+  if(!uuidOk(id)||!input.reason?.trim()||input.reason.trim().length>240)
+    return error('Record the external settlement reference or reason.','reason_required');
+  const [row]=await db(c.env)`with updated as (
+    update trip_settlements set status='settled',settled_by=${user.id}::uuid,
+      settled_at=now(),settlement_note=${input.reason.trim()}
+    where trip_id=${id}::uuid and status='pending'
+    returning trip_id,net_due_to_platform_rupees
+  ), redemption as (
+    update promo_redemptions set subsidy_status='settled',settled_by=${user.id}::uuid,settled_at=now()
+    where trip_id in (select trip_id from updated)
+    returning trip_id
+  ) select trip_id,net_due_to_platform_rupees from updated`;
+  if(!row)return error('Only a pending trip settlement can be marked settled.','invalid_state',409);
+  await audit(c.env,user,'settle_trip',id,{net_due_to_platform_rupees:row.net_due_to_platform_rupees,reason:input.reason.trim()},c.req.raw);
   return c.json({ok:true});
 });
 api.get('/v1/admin/audit',async c=>{

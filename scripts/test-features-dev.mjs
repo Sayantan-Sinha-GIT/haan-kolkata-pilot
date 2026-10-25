@@ -88,13 +88,26 @@ try{
   check('mark stop',await call('/v1/trips/'+id+'/stops/arrive','POST',{},'rider'),200,x=>x.remaining===0);
   check('next target is drop',await call('/v1/trips/'+id+'/route?lat=22.58&lng=88.355','GET',undefined,'rider'),200,
     x=>Number(x.target.lat)===drop.lat);
-  check('complete discounted trip',await call('/v1/trips/'+id+'/complete','POST',{},'rider'),200,
-    x=>Number(x.trip.final_rupees)-Number(x.trip.customer_final_rupees)===20);
+  check('complete discounted trip with 20% final-fare fee',await call('/v1/trips/'+id+'/complete','POST',{},'rider'),200,
+    x=>Number(x.trip.final_rupees)-Number(x.trip.customer_final_rupees)===20&&
+      Number(x.trip.platform_fee_rupees)===Math.round(Number(x.trip.customer_final_rupees)*.2)&&
+      Number(x.trip.rider_earnings_rupees)===Number(x.trip.final_rupees)-Math.round(Number(x.trip.final_rupees)*.2));
+  check('rider receipt shows fee and earnings',await call('/v1/trips/'+id,'GET',undefined,'rider'),200,
+    x=>Number(x.trip.platform_fee_rupees)===Math.round(Number(x.trip.customer_final_rupees)*.2)&&
+      Number(x.trip.promotion_topup_rupees)>0&&x.trip.settlement_status==='pending');
+  check('customer cannot view operator settlements',await call('/v1/admin/settlements','GET',undefined,'customer'),403);
+  const settlement=check('admin sees pending commission ledger',await call('/v1/admin/settlements','GET',undefined,'admin'),200,
+    x=>x.settlements.some(s=>s.trip_id===id&&s.status==='pending')).settlements.find(s=>s.trip_id===id);
+  check('settlement arithmetic', {status:200,data:settlement},200,s=>
+    Number(s.customer_due_rupees)===Number(s.platform_fee_rupees)+Number(s.rider_earnings_rupees)-Number(s.promotion_topup_rupees)&&
+    Number(s.net_due_to_platform_rupees)===Number(s.customer_due_rupees)-Number(s.rider_earnings_rupees));
   const redemption=check('subsidy pending',await call('/v1/admin/promo-redemptions','GET',undefined,'admin'),200,
     x=>x.redemptions.some(r=>r.trip_id===id&&r.subsidy_status==='pending')).redemptions.find(r=>r.trip_id===id);
   check('manual settlement needs reason',await call('/v1/admin/promo-redemptions/'+redemption.id+'/settle','POST',{},'admin'),400);
   check('manual settlement',await call('/v1/admin/promo-redemptions/'+redemption.id+'/settle','POST',
     {reason:'QA mock settlement'},'admin'),200);
+  check('legacy subsidy settlement syncs trip ledger',await call('/v1/admin/settlements','GET',undefined,'admin'),200,
+    x=>x.settlements.some(s=>s.trip_id===id&&s.status==='settled'));
   const secondPromo=await makeRide({promo_code:promo.code});
   check('second promo arrive',await call('/v1/trips/'+secondPromo.trip.id+'/arrived','POST',{},'rider'),200);
   check('second promo start',await call('/v1/trips/'+secondPromo.trip.id+'/start','POST',
@@ -115,10 +128,15 @@ try{
   check('final-fare start',await call('/v1/trips/'+flexRide.trip.id+'/start','POST',
     {pin:flexRide.pin},'rider'),200);
   const flexDone=check('final-fare complete',await call('/v1/trips/'+flexRide.trip.id+'/complete','POST',
-    {final_km:0.1},'rider'),200).trip;
+    {final_km:0.1},'rider'),200,x=>Number(x.trip.platform_fee_rupees)===Math.round(Number(x.trip.customer_final_rupees)*.2)).trip;
   check('subsidy uses final discount',await call('/v1/admin/promo-redemptions','GET',undefined,'admin'),200,
     x=>x.redemptions.some(r=>r.trip_id===flexRide.trip.id&&
       Number(r.discount_rupees)===Number(flexDone.final_rupees)-Number(flexDone.customer_final_rupees)));
+  check('new settlement needs reason',await call('/v1/admin/settlements/'+flexRide.trip.id+'/settle','POST',{},'admin'),400);
+  check('new settlement endpoint',await call('/v1/admin/settlements/'+flexRide.trip.id+'/settle','POST',
+    {reason:'QA external transfer receipt'},'admin'),200);
+  check('settlement cannot be repeated',await call('/v1/admin/settlements/'+flexRide.trip.id+'/settle','POST',
+    {reason:'QA duplicate'},'admin'),409);
   const ticket=check('support case',await call('/v1/tickets','POST',
     {subject:'QA safety case',message:'Please review',trip_id:id},'customer'),201).ticket;
   check('triage support case',await call('/v1/admin/tickets/'+ticket.id,'PATCH',

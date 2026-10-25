@@ -33,6 +33,9 @@ async function makeAdmin(role){
   return {email:address,password,code:totp(Buffer.from(secret,'base64url')),id:user.id};
 }
 try {
+  assert('Google login requires token',await request('/v1/auth/google','POST',{role:'customer'}),400);
+  assert('forged Google token rejected',await request('/v1/auth/google','POST',
+    {role:'customer',id_token:'header.payload.signature'}),401);
   assert('OTP email sent',await request('/v1/auth/request-otp','POST',{email,role:'customer'}),200);
   assert('resend cooldown',await request('/v1/auth/request-otp','POST',{email,role:'customer'}),429,data=>data.code==='resend_cooldown');
   assert('wrong OTP attempt',await request('/v1/auth/verify-otp','POST',{email,role:'customer',code:'000000'}),400,data=>data.attempts_left===4);
@@ -48,9 +51,10 @@ try {
   assert('deleted account token blocked',await request('/v1/profile','GET',undefined,refreshed.access_token),401);
 
   const superAdmin=await makeAdmin('super_admin'),support=await makeAdmin('support_agent');
-  for(let i=1;i<=5;i++) assert(`wrong admin password ${i}`,await request('/v1/admin/login','POST',{email:superAdmin.email,password:'wrong',totp:superAdmin.code},undefined,'198.51.100.12'),401);
-  assert('admin locked after five',await request('/v1/admin/login','POST',{email:superAdmin.email,password:superAdmin.password,totp:superAdmin.code},undefined,'198.51.100.12'),429);
-  const adminLogin=assert('super admin TOTP login',await request('/v1/admin/login','POST',{email:superAdmin.email,password:superAdmin.password,totp:superAdmin.code},undefined,'198.51.100.13'),200,data=>Boolean(data.access_token));
+  const lockIp=`203.0.113.${50+Math.floor(Math.random()*100)}`;
+  for(let i=1;i<=5;i++) assert(`wrong admin password ${i}`,await request('/v1/admin/login','POST',{email:superAdmin.email,password:'wrong',totp:superAdmin.code},undefined,lockIp),401);
+  assert('admin locked after five',await request('/v1/admin/login','POST',{email:superAdmin.email,password:superAdmin.password,totp:superAdmin.code},undefined,lockIp),429);
+  const adminLogin=assert('super admin TOTP login',await request('/v1/admin/login','POST',{email:superAdmin.email,password:superAdmin.password,totp:superAdmin.code},undefined,'203.0.113.201'),200,data=>Boolean(data.access_token));
   assert('admin dashboard',await request('/v1/admin/dashboard','GET',undefined,adminLogin.access_token),200,data=>Boolean(data.trips&&data.riders));
   assert('admin audit login',await request('/v1/admin/audit','GET',undefined,adminLogin.access_token),200,data=>data.entries.some(x=>x.action==='login'&&x.admin_email===superAdmin.email));
   const supportLogin=assert('support TOTP login',await request('/v1/admin/login','POST',{email:support.email,password:support.password,totp:support.code},undefined,'198.51.100.14'),200);

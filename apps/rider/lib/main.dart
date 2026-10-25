@@ -76,6 +76,16 @@ class _RiderSignInState extends State<RiderSignIn> {
     }
   }
 
+  Future<void> googleSubmit() async {
+    setState(() {busy=true;error=null;});
+    try { await app.googleLogin(); }
+    on ApiException catch(e){if(mounted)setState(()=>error=e.message);}
+    catch(_){if(mounted)setState(()=>error=app.language=='hi'
+        ? 'Google से साइन इन नहीं हो सका। ईमेल कोड आज़माएँ।'
+        : 'Google sign-in could not finish. Try the email code.');}
+    finally{if(mounted)setState(()=>busy=false);}
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
       body: SafeArea(
@@ -110,6 +120,11 @@ class _RiderSignInState extends State<RiderSignIn> {
                                 ? app.tr('verify')
                                 : app.tr('sendCode'),
                         onPressed: busy ? null : submit),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                        onPressed: busy ? null : googleSubmit,
+                        icon: const Icon(Icons.account_circle_outlined),
+                        label: Text(app.language=='hi'?'Google से आगे बढ़ें':'Continue with Google')),
                     if (sent)
                       TextButton(
                           onPressed: busy
@@ -560,6 +575,9 @@ class _RiderHomeState extends State<RiderHome> {
       const SizedBox(height: 10),
       Text('${o['estimated_km']} km  ·  ₹${o['estimate_rupees']}',
           style: Theme.of(context).textTheme.headlineMedium),
+      Text(app.language=='hi'
+        ? 'अनुमानित आपकी कमाई ₹${((o['estimate_rupees'] as num).toInt()*0.8).round()} · Haan 20% रखता है'
+        : 'Estimated earnings ₹${((o['estimate_rupees'] as num).toInt()*0.8).round()} · Haan keeps 20%'),
       const SizedBox(height: 16),
       Row(children: [
         Expanded(
@@ -939,6 +957,9 @@ class _RiderEarningsState extends State<RiderEarnings> {
                                       .textTheme
                                       .displayMedium),
                               Text('${data!['trips_today']} trips')
+                              ,Text(app.language=='hi'
+                                  ? 'आज Haan शुल्क ₹${data!['today_platform_fee']}'
+                                  : 'Haan fees today ₹${data!['today_platform_fee']}')
                             ]))),
                 Card(
                     child: Padding(
@@ -951,6 +972,9 @@ class _RiderEarningsState extends State<RiderEarnings> {
                                   style:
                                       Theme.of(context).textTheme.displayMedium)
                             ]))),
+                Text(app.language=='hi'
+                  ? 'बकाया सेटलमेंट ₹${data!['pending_net_due_to_platform']} (धनात्मक: Haan को दें, ऋणात्मक: Haan से लें)। ग्राहक का भुगतान अलग से जाँचें।'
+                  : 'Pending settlement ₹${data!['pending_net_due_to_platform']} (positive: remit to Haan; negative: Haan owes you). Verify customer payment separately.'),
                 Text(app.tr('payDirect'))
               ])));
 }
@@ -997,7 +1021,7 @@ class _RiderHistoryState extends State<RiderHistory> {
                                   subtitle: Text(
                                       '${t['status']} · ${t['created_at']}'),
                                   trailing: Text(
-                                      '₹${t['final_rupees'] ?? t['estimate_rupees']}'),
+                                      '₹${t['rider_earnings_rupees'] ?? ((t['estimate_rupees'] as num).toInt()*0.8).round()}'),
                                   onTap: () => Navigator.push(
                                       context,
                                       MaterialPageRoute(
@@ -1045,8 +1069,14 @@ class _RiderReceiptState extends State<RiderReceipt> {
                                 style:
                                     Theme.of(context).textTheme.displayMedium),
                             Text(app.language=='hi'?'ग्राहक से लें':'Collect from customer'),
-                            if((trip!['promo_discount_rupees'] as num?)?.toInt()!=0)
-                              Text('₹${trip!['promo_discount_rupees']} ${app.language=='hi'?'प्रोमो सब्सिडी — ऑपरेटर से अलग':'promotion subsidy — settle separately with operator'}'),
+                            Text(app.language=='hi'
+                              ? 'आपकी कमाई ₹${trip!['rider_earnings_rupees'] ?? '—'} · Haan शुल्क ₹${trip!['platform_fee_rupees'] ?? '—'}'
+                              : 'Your earnings ₹${trip!['rider_earnings_rupees'] ?? '—'} · Haan fee ₹${trip!['platform_fee_rupees'] ?? '—'}'),
+                            if((trip!['promotion_topup_rupees'] as num?)?.toInt()!=0)
+                              Text('₹${trip!['promotion_topup_rupees']} ${app.language=='hi'?'प्रोमो टॉप-अप — ऑपरेटर से अलग':'promotion top-up — settle separately with operator'}'),
+                            Text(app.language=='hi'
+                              ? 'Haan सेटलमेंट ₹${trip!['net_due_to_platform_rupees'] ?? '—'} (धनात्मक: Haan को दें)'
+                              : 'Net settlement ₹${trip!['net_due_to_platform_rupees'] ?? '—'} (positive: remit to Haan)'),
                           ]))),
               const SizedBox(height:16),
               Builder(builder:(context){

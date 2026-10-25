@@ -52,13 +52,13 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 
 **Non-goals (v1):** Play Store or App Store release, iOS; in-app payment gateway and automatic payment verification; public website accounts; parcels; in-app chat or masked calling (phone dialer instead); languages beyond Hindi and English. Shared ride co-passenger matching, guaranteed scheduled pickup, full intercity toll/return pricing, and automated operator-to-rider subsidy payout are later operational work; their prototype surfaces state these limits.
 
-**Feature-parity boundary:** “Uber/Rapido-style” covers the request, match, pickup, plate check, PIN, navigation, stops, drop, receipt and support journey plus the prototype options named above. The Cab shared option books one Cab and does not find a co-passenger. Intercity is a one-way Cab estimate using the current distance fare, excluding tolls, permits and return charges. Scheduled rides enter normal matching ten minutes before pickup and do not reserve a driver. Promotions reduce the customer's amount due while leaving the rider fare intact; the operator must manually settle the difference outside Haan. The app must state these limits before confirmation.
+**Feature-parity boundary:** “Uber/Rapido-style” covers the request, match, pickup, plate check, PIN, navigation, stops, drop, receipt and support journey plus the prototype options named above. The Cab shared option books one Cab and does not find a co-passenger. Intercity is a one-way Cab estimate using the current distance fare, excluding tolls, permits and return charges. Scheduled rides enter normal matching ten minutes before pickup and do not reserve a driver. Promotions reduce the customer's amount due. Haan's commission is 20% of the customer's **final** fare; the operator must manually reconcile that fee and any rider promotion top-up outside Haan. The app must state these limits before confirmation.
 
 ## 5. Features
 
 | ID | Feature | Priority | Key rule |
 |---|---|---|---|
-| F1 | Email OTP login (Brevo) | Must | 6 digits, 10-min expiry, 5 attempts, 30-s resend cooldown |
+| F1 | Email OTP and Google login (customer and rider) | Must | Email: 6 digits, 10-min expiry, 5 attempts, 30-s resend cooldown. Google: Firebase Auth Android sign-in, signed ID token verified by backend against Haan's Firebase project and Google provider; existing email account keeps its role |
 | F2 | English/Hindi and Light/Dark/System | Must | Instant switch, saved on device and profile |
 | F3 | Map, live GPS, permission explainers | Must | Works with GPS off via manual pickup |
 | F4 | Destination search, recents, saved Home/Work | Must | Ola Maps for Indian landmarks; cached |
@@ -102,14 +102,15 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F42 | Cab shared preview | Should | Visible, bookable Cab option with clear notice that no co-rider matching or shared discount is active |
 | F43 | One-way intercity Cab preview | Should | 20–500 km direct distance; current Cab distance fare only; tolls, permits and return charges excluded and labelled |
 | F44 | Rider destination filter | Should | Rider can choose or clear a destination; matching only offers trips that move at least 0.5 km or 2% of remaining distance toward it |
-| F45 | Operator promotions | Should | Super admin sets code, time window, cap, redemption limit and active state; atomic booking claim prevents overuse; cancelled/unmatched trips release a claim; customer sees discount; rider sees full fare; admin tracks and manually settles subsidy |
+| F45 | Operator promotions | Should | Super admin sets code, time window, cap, redemption limit and active state; atomic booking claim prevents overuse; cancelled/unmatched trips release a claim; customer sees discount; rider sees full fare; admin tracks top-up in the trip settlement ledger |
 | F46 | Rider self-cancel quota | Must | Three assigned-trip self-cancellations per Asia/Kolkata calendar day; fourth blocked; no-show and customer/admin cancellation do not consume the quota |
-| F47 | Admin case triage | Must | Support priority, category, assigned agent, status, resolution, reply and notes; super admin also manages promotions, subsidies, users, riders, trips, scheduled rides, fares and audit |
+| F47 | Admin case triage | Must | Support priority, category, assigned agent, status, resolution, reply and notes; super admin also manages promotions, settlements, users, riders, trips, scheduled rides, fares and audit |
+| F48 | 20% final-fare commission | Must | On completion, Haan fee is rounded to rupees from the customer's actual final amount due. Rider keeps 80% of the undiscounted trip fare; Haan funds the promotion adjustment. Admin has an auditable pending/settled ledger; status never implies Haan verified direct customer payment |
 
 ## 6. Main user flows
 
 **6.1 Customer books a ride**
-1. First launch: pick language, enter email, enter OTP, set name.
+1. First launch: pick language, sign in with Google or enter email and verify its OTP, then set name.
 2. Home: full-screen map and "Where to?" sheet. Pickup defaults to GPS and is editable.
 3. Search or tap the map. Pick Bike, Auto or Cab; see fare, distance, ETA. Optionally add up to two stops, a guest passenger, pickup instruction, valid promotion, or a scheduled time. Cab offers labelled shared and intercity previews. Review all route points and the exact customer amount due before confirmation.
 4. Tap **Book**; a radar pulse plays while searching.
@@ -126,7 +127,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 **6.3 Rider completes a trip**
 1. Sign up, enter name and mobile, licence number, plate, vehicle make/model/colour/year, document expiry dates and optional UPI ID. Upload licence, RC, selfie and insurance photos; Auto and Cab also upload a commercial permit. Status: Pending. Admin reviews every field and image. Expired documents prevent approval or going online.
 2. After approval: **Go Online**. Offer shows pickup distance, trip distance, fare, 15-s countdown, Accept/Decline.
-3. After acceptance, see customer or named guest, pickup instruction, route stops, full rider fare, call button and a direct Google Maps navigation button to the exact pickup coordinate. Either participant can share the trip or call 112. Tap **Arrived**; the server starts the wait clock. After five minutes without the customer, a no-show action becomes available. Otherwise ask the boarding passenger for the PIN and enter it to **Start**. Only after start does the direct Google Maps button target the next stop, then the drop; mark each stop reached. Tap **End trip**, show the customer's exact amount due via personal UPI QR or collect cash, verify payment outside Haan, and rate the customer. The operator subsidy, if any, is tracked separately for manual settlement.
+3. After acceptance, see customer or named guest, pickup instruction, route stops, estimated rider earnings after Haan's 20% fee, call button and a direct Google Maps navigation button to the exact pickup coordinate. Either participant can share the trip or call 112. Tap **Arrived**; the server starts the wait clock. After five minutes without the customer, a no-show action becomes available. Otherwise ask the boarding passenger for the PIN and enter it to **Start**. Only after start does the direct Google Maps button target the next stop, then the drop; mark each stop reached. Tap **End trip**, show the customer's exact amount due via personal UPI QR or collect cash, verify payment outside Haan, and rate the customer. The ledger shows rider earnings, Haan's commission and any promotion top-up for manual settlement.
 4. Earnings screen shows the day.
 
 **6.4 Admin support**
@@ -167,7 +168,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | Driver attempts to finish before an extra stop | Server returns a stop-remaining error; navigation still targets the stop |
 | Fourth rider self-cancel in one Kolkata day | Server denies; app shows remaining quota and a support shortcut; no-show stays separate |
 | Promotion ends or reaches its cap during quote/booking | Revalidate on booking, explain that the code is unavailable and request a new confirmation |
-| Promotion redemption on a completed trip | Customer owes discounted amount; admin sees a pending operator subsidy until manually settled |
+| Completed promoted trip | Customer owes discounted amount; admin sees Haan's 20% fee, rider earnings, promotion top-up and pending net settlement |
 
 ## 7. Pages and screens
 
@@ -176,7 +177,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | Customer app | Language, email, OTP, name, home map, destination search, vehicle and preview mode choice, up to two stops, guest passenger, promotion, scheduled request list, finding rider, rider assigned (PIN), live trip, summary and rating, assistant (mic, confirm), history, receipt, saved places, help and tickets, profile (emergency contact, delete), settings, update required |
 | Rider app | Email, OTP, profile, documents, verification status, home (online toggle and destination filter), incoming request, to pickup, PIN entry, ordered stop navigation, to drop, end trip and collect, self-cancel quota, earnings, history, help, settings, update required |
 | Website | One long landing page (hero, how it works, features, for riders, downloads with QR, FAQ, footer) plus install guide, privacy, terms, contact. EN/HI and theme toggles |
-| Admin | Login + TOTP, dashboard, rider queue and detail, users, trips and detail, scheduled rides, support case triage, promotions, manual subsidy ledger, fare config, audit log, quota counters |
+| Admin | Login + TOTP, dashboard, rider queue and detail, users, trips and detail, scheduled rides, support case triage, promotions, manual trip settlement ledger, fare config, audit log, quota counters |
 
 ## 8. Data
 
@@ -190,7 +191,8 @@ Every table: UUID id, created_at, updated_at.
 | sessions | user, refresh_token_hash, device, expires_at, revoked_at | Access 15 min, refresh 30 days, rotated |
 | trips | customer, rider, status, vehicle_type, pickup/drop, ordered stops and next stop index, service mode, guest name/mobile, promotion, rider and customer estimated/final fares, pickup_note, pin_hash, timestamps, cancelled_by, cancel_reason, via_assistant | Transitions checked server-side only; note at most 160 characters; no End until stops reached |
 | scheduled_rides | customer, request, due time, estimate, PIN hash, status, resulting trip | Three pending per customer; same ID used for activated trip |
-| promotions, promo_redemptions | code, discount, max discount, redemption cap, active window, trip discount, settlement status | Super admin changes and settles; no automatic funds movement |
+| promotions, promo_redemptions | code, discount, max discount, redemption cap, active window, trip discount | Super admin changes codes; no automatic funds movement |
+| trip_settlements | customer due, Haan fee, rider earnings, promotion top-up, net manual balance, pending/settled, audit | Completed rides only; super admin records externally verified settlement |
 | trip_offers | trip, rider, offered_at, responded_at, response | accepted / declined / timeout |
 | trip_locations | trip, lat, lng, recorded_at | Sampled; purged after 30 days |
 | ratings | trip, from, to, stars, comment | One per direction per trip |
@@ -212,14 +214,14 @@ Every table: UUID id, created_at, updated_at.
 6. **Admin security:** the path (example `/4632/admin`) is a setting, not security. Also required: hashed password, TOTP, 5 login attempts per 15 min per IP, noindex, never linked, every action audit-logged.
 7. **Secrets:** only in backend secrets; never in an app, the website or the repo. `.env.example` provided.
 8. **Privacy:** location points and AI transcripts purged after 30 days; account deletion works; privacy policy discloses all of it.
-9. **No money moves through the product.** Cash or direct UPI to the rider only. A promotion creates an operator-funded difference to settle outside Haan; the app never asserts that settlement or customer payment occurred automatically.
+9. **No money moves through the product.** Cash or direct UPI to the rider only. At completion let G be the undiscounted final fare and C be the customer's discounted final fare. Haan's fee is `round(0.20 × C)`; promised rider earnings are `G − round(0.20 × G)`. Promotion top-up is `rider earnings − (C − Haan fee)`. The rider's net manual remittance to Haan is `C − rider earnings`, which may be negative if Haan owes the rider. The ledger is an expected balance and never asserts that customer payment or operator settlement occurred automatically.
 10. **Rate limits:** OTP (per email and IP), assistant (20 calls/hour/user), login.
 11. **Active trip blocks account deletion** until it ends.
 12. **Never add credits or a card** to any service; usage stops at the free cap and degrades gracefully.
 13. **Rider cancellations:** count assigned-trip self-cancels by Asia/Kolkata day; allow three, block the fourth; no-show and customer/admin cancellations do not count.
 14. **Route order:** the pickup remains the target until the customer PIN starts the ride. Then Google Maps targets each unvisited stop in order, finally the drop.
 15. **Preview honesty:** shared mode has no passenger pooling; intercity uses a one-way estimate; scheduled requests have no driver guarantee. State these before booking.
-16. **Promotion capacity and ledger:** quote checks the available cap; booking reserves one use atomically with trip creation and redemption. A cancelled or unmatched trip releases its use. When the final fare changes, the subsidy ledger adjusts to the actual rider fare minus customer due in the same database statement. Manual settlement is allowed only after completion.
+16. **Promotion capacity and ledger:** quote checks the available cap; booking reserves one use atomically with trip creation and redemption. A cancelled or unmatched trip releases its use. When the final fare changes, the completed-trip ledger calculates commission from the customer's final fare and the rider top-up from that final fare in the same database statement. Manual settlement is allowed only after completion and requires an external reference or reason.
 
 ## 10. AI features
 
@@ -318,7 +320,9 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 26 | Scheduled request | Customer can hold/cancel three; due cron creates a matchable trip ten minutes early; admin can view/cancel pending |
 | 27 | Preview modes | Shared and intercity Cab options appear with their operational and pricing limits stated before confirmation |
 | 28 | Destination filter | Rider can set/clear; matching excludes trips that do not move toward the chosen destination |
-| 29 | Promotion | Admin can create/activate/deactivate; simultaneous bookings cannot exceed the cap; cancellation releases capacity; customer due and rider fare differ by the discount; subsidy ledger records manual settlement |
+| 29 | Promotion and commission | Admin can create/activate/deactivate; simultaneous bookings cannot exceed the cap; cancellation releases capacity; Haan fee is exactly 20% of customer final fare rounded to rupees; settlement ledger shows rider top-up and manual balance |
+| 30 | Google and email sign-in | Both customer and rider can choose Google or email OTP; forged, expired, wrong-project and non-Google Firebase tokens are rejected; an existing email retains its original role; blocked/deleted users cannot sign in |
+| 31 | Manual trip settlement | Customer receipt shows discounted due, rider receipt shows earnings/fee/top-up/net, admin can mark a completed pending settlement only with an external reference or reason; duplicate and non-admin attempts fail |
 | 30 | Self-cancel quota | Three rider self-cancels succeed in a Kolkata day, fourth fails; remaining count is shown; no-show does not count |
 | 31 | Support triage | Agent can set priority, category, owner, status and resolution; replies and all changes are auditable |
 

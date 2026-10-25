@@ -7,10 +7,20 @@ const firebaseAppId=String.fromEnvironment('FIREBASE_APP_ID');
 const firebaseSenderId=String.fromEnvironment('FIREBASE_SENDER_ID');
 const firebaseApiKey=String.fromEnvironment('FIREBASE_API_KEY');
 
+Future<FirebaseApp> ensureFirebase() async {
+  if(firebaseProjectId.isEmpty||firebaseAppId.isEmpty||firebaseSenderId.isEmpty||firebaseApiKey.isEmpty){
+    throw StateError('Google sign-in is not configured for this build.');
+  }
+  if(Firebase.apps.isNotEmpty)return Firebase.app();
+  return Firebase.initializeApp(options:const FirebaseOptions(
+    apiKey:firebaseApiKey,appId:firebaseAppId,
+    messagingSenderId:firebaseSenderId,projectId:firebaseProjectId));
+}
+
 Future<void> registerPush(HaanApi api)async{
   if(firebaseProjectId.isEmpty||firebaseAppId.isEmpty||firebaseSenderId.isEmpty||firebaseApiKey.isEmpty||!api.isSignedIn)return;
   try{
-    if(Firebase.apps.isEmpty){await Firebase.initializeApp(options:const FirebaseOptions(apiKey:firebaseApiKey,appId:firebaseAppId,messagingSenderId:firebaseSenderId,projectId:firebaseProjectId));}
+    await ensureFirebase();
     final messaging=FirebaseMessaging.instance;
     await messaging.requestPermission();
     final token=await messaging.getToken();

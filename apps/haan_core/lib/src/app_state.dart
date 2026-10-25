@@ -2,10 +2,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'api.dart';
 import 'push.dart';
 
 class HaanState extends ChangeNotifier {
+  static const googleServerClientId='12811346961-e4vs52ga2cnsen7vvt0hg4c9atafntoa.apps.googleusercontent.com';
+  Future<void>? _googleReady;
   final String role;
   HaanState({required this.role});
   final HaanApi api = HaanApi();
@@ -49,7 +54,36 @@ class HaanState extends ChangeNotifier {
     await api.saveTokens(Map<String,dynamic>.from(tokens));
     signedIn=true;await refreshProfile();await registerPush(api);notifyListeners();
   }
-  Future<void> logout() async { await api.signOut(); signedIn=false;profile=null;notifyListeners(); }
+  Future<bool> googleLogin() async {
+    final firebaseApp=await ensureFirebase();
+    _googleReady??=GoogleSignIn.instance.initialize(serverClientId:googleServerClientId);
+    await _googleReady;
+    GoogleSignInAccount account;
+    try{account=await GoogleSignIn.instance.authenticate();}
+    on GoogleSignInException catch(e){
+      if(e.code==GoogleSignInExceptionCode.canceled)return false;
+      rethrow;
+    }
+    try{
+      final credential=GoogleAuthProvider.credential(idToken:account.authentication.idToken);
+      final firebaseUser=await FirebaseAuth.instanceFor(app:firebaseApp).signInWithCredential(credential);
+      final idToken=await firebaseUser.user?.getIdToken(true);
+      if(idToken==null)throw StateError('Google did not return a sign-in token.');
+      final tokens=await api.post('/v1/auth/google',{'id_token':idToken,'role':role,'device':'Android Google'});
+      await api.saveTokens(Map<String,dynamic>.from(tokens));
+      signedIn=true;await refreshProfile();await registerPush(api);notifyListeners();
+      return true;
+    }catch(_){
+      await FirebaseAuth.instanceFor(app:firebaseApp).signOut();
+      rethrow;
+    }
+  }
+  Future<void> logout() async {
+    await api.signOut();
+    if(Firebase.apps.isNotEmpty){try{await FirebaseAuth.instance.signOut();}catch(_){}}
+    if(_googleReady!=null){try{await GoogleSignIn.instance.signOut();}catch(_){}}
+    signedIn=false;profile=null;notifyListeners();
+  }
   Future<void> setLanguage(String value) async {
     language=value;notifyListeners();
     try { final prefs=await SharedPreferences.getInstance();await prefs.setString('language',value); } catch (_) {}
