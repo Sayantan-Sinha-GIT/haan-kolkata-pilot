@@ -501,10 +501,17 @@ api.post('/v1/trips/:id/complete',async c=>{
   const minutes=Math.max(1,Math.round((Date.now()-new Date(trip.started_at).getTime())/60_000));
   const amount=Math.min(fare({base:Number(trip.base),per_km:Number(trip.per_km),per_min:Number(trip.per_min),minimum:Number(trip.minimum)},km,minutes),Math.round(Number(trip.estimate_rupees)*1.5));
   const discount=Math.min(Number(trip.promo_discount_rupees||0),Math.max(0,amount-1));
-  const rows=await sql`update trips set status='completed',completed_at=now(),final_km=${km},duration_min=${minutes},final_rupees=${amount},
-    customer_final_rupees=${amount-discount}
+  const rows=await sql`with updated_trip as (
+    update trips set status='completed',completed_at=now(),final_km=${km},duration_min=${minutes},
+      final_rupees=${amount},customer_final_rupees=${amount-discount}
     where id=${id}::uuid and rider_id=${user.id}::uuid and status='in_progress'
-      and next_stop_index>=jsonb_array_length(stops) returning id,final_rupees,customer_final_rupees`;
+      and next_stop_index>=jsonb_array_length(stops)
+    returning id,final_rupees,customer_final_rupees
+  ), updated_redemption as (
+    update promo_redemptions set discount_rupees=${discount}
+    where trip_id in (select id from updated_trip)
+    returning id
+  ) select id,final_rupees,customer_final_rupees from updated_trip`;
   if(!rows.length)return error('Trip already ended.','invalid_state',409);
   await broadcast(c.env,id,{status:'completed',final_rupees:amount,customer_final_rupees:amount-discount});return c.json({trip:rows[0],payment:'cash_or_direct_upi'});
 });

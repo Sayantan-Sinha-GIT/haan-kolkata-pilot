@@ -104,6 +104,21 @@ try{
     {pickup,drop,vehicle:'Bike',promo_code:promo.code}),409,x=>x.code==='invalid_promotion');
   check('disable promotion',await call('/v1/admin/promotions/'+promo.id,'PATCH',
     {active:false,reason:'QA complete'},'admin'),200);
+  const flexPromo=check('create final-fare promotion',await call('/v1/admin/promotions','POST',{
+    code:'LOW'+suffix.toUpperCase(),title:'Final fare QA',discount_type:'flat',amount:100,
+    max_discount:100,max_redemptions:1,starts_at:new Date(Date.now()-60000).toISOString(),
+    ends_at:new Date(Date.now()+3600000).toISOString()},'admin'),201).promotion;
+  check('enable final-fare promotion',await call('/v1/admin/promotions/'+flexPromo.id,'PATCH',
+    {active:true,reason:'QA final fare'},'admin'),200);
+  const flexRide=await makeRide({promo_code:flexPromo.code});
+  check('final-fare arrive',await call('/v1/trips/'+flexRide.trip.id+'/arrived','POST',{},'rider'),200);
+  check('final-fare start',await call('/v1/trips/'+flexRide.trip.id+'/start','POST',
+    {pin:flexRide.pin},'rider'),200);
+  const flexDone=check('final-fare complete',await call('/v1/trips/'+flexRide.trip.id+'/complete','POST',
+    {final_km:0.1},'rider'),200).trip;
+  check('subsidy uses final discount',await call('/v1/admin/promo-redemptions','GET',undefined,'admin'),200,
+    x=>x.redemptions.some(r=>r.trip_id===flexRide.trip.id&&
+      Number(r.discount_rupees)===Number(flexDone.final_rupees)-Number(flexDone.customer_final_rupees)));
   const ticket=check('support case',await call('/v1/tickets','POST',
     {subject:'QA safety case',message:'Please review',trip_id:id},'customer'),201).ticket;
   check('triage support case',await call('/v1/admin/tickets/'+ticket.id,'PATCH',

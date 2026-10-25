@@ -219,7 +219,7 @@ Every table: UUID id, created_at, updated_at.
 13. **Rider cancellations:** count assigned-trip self-cancels by Asia/Kolkata day; allow three, block the fourth; no-show and customer/admin cancellations do not count.
 14. **Route order:** the pickup remains the target until the customer PIN starts the ride. Then Google Maps targets each unvisited stop in order, finally the drop.
 15. **Preview honesty:** shared mode has no passenger pooling; intercity uses a one-way estimate; scheduled requests have no driver guarantee. State these before booking.
-16. **Promotion capacity:** quote checks the available cap; booking reserves one use atomically with trip creation and redemption. A cancelled or unmatched trip releases its use. Manual subsidy settlement is allowed only after completion.
+16. **Promotion capacity and ledger:** quote checks the available cap; booking reserves one use atomically with trip creation and redemption. A cancelled or unmatched trip releases its use. When the final fare changes, the subsidy ledger adjusts to the actual rider fare minus customer due in the same database statement. Manual settlement is allowed only after completion.
 
 ## 10. AI features
 
