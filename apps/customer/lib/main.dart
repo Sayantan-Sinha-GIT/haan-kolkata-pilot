@@ -1220,7 +1220,7 @@ class _TripHistoryState extends State<TripHistory> {
                                 subtitle: Text(
                                     '${t['vehicle_type']} · ${t['status']} · ${t['created_at']}'),
                                 trailing: Text(
-                                    '₹${t['final_rupees'] ?? t['estimate_rupees']}'),
+                                    '₹${t['customer_final_rupees'] ?? t['final_rupees'] ?? t['estimate_rupees']}'),
                                 onTap: () => Navigator.push(
                                     context,
                                     MaterialPageRoute(
