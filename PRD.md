@@ -2,7 +2,7 @@
 
 ## Release update — 25 October 2026
 
-The October release expands the complete trip sequence and rider verification. The requirements below supersede older wording about three-document approval and generic map links. Haan retains its own visual identity while using the familiar request, match, pickup, PIN, trip and receipt sequence.
+The October release expands the complete trip sequence and rider verification. The requirements below supersede older wording about three-document approval and generic map links. Haan retains its own visual identity while using the familiar request, match, pickup, PIN, trip and receipt sequence. The follow-up adds an arrival clock, a five-minute no-show action, direct UPI QR handoff, and safety controls for both participants.
 
 ## 0. What changed
 
@@ -50,6 +50,8 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 
 **Non-goals (v1):** Play Store or App Store release, iOS; in-app payment gateway; logins on the website; surge pricing, pooling, scheduled rides, parcels; in-app chat or masked calling (phone dialer instead); languages beyond Hindi and English.
 
+**Feature-parity boundary:** “Uber/Rapido-style” describes the core trip journey, not every feature of those large platforms. This pilot does not offer scheduled trips, extra stops, booking for another person, pooled/intercity services, masked numbers, a payment processor, automatic payment verification, driver destination filters, promotions, or 24/7 staffed safety response. These require new operations, provider contracts, fare rules and field testing before being promised to customers. The supported pilot flow is defined below and must be truthful in the apps and website.
+
 ## 5. Features
 
 | ID | Feature | Priority | Key rule |
@@ -78,16 +80,20 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F22 | Trip history and receipts | Should | Cached offline |
 | F23 | Ratings both ways | Should | 1-5 stars, optional comment |
 | F24 | SOS: share live trip link, 112 shortcut | Should | Prompts for emergency contact if missing |
-| F25 | Rider earnings | Should | Today/week, cash collected |
+| F25 | Rider fare summary | Should | Today/week completed-trip totals; never imply cash or UPI was received without external confirmation |
 | F26 | Low-data mode (rider) | Should | Location every 5 s moving, 15 s idle, batch on poor network |
 | F27 | Editable fare config | Should | No redeploy; `super_admin` only |
 | F28 | Admin dashboard and quota counters | Should | Ola, Gemini, Groq, email, storage usage; alert at 80% |
 | F29 | Force-update screen | Should | Needed because there is no Play Store |
 | F30 | Account deletion | Should | Trips anonymised |
-| F31 | Rider's UPI QR at trip end | Nice | Display only |
+| F31 | Rider's UPI QR at trip end | Must | QR and UPI app link pay the rider directly; show exact final fare and recipient; never claim payment succeeded automatically |
 | F32 | More Indian languages | Nice | Prompt and string change only |
 | F33 | Pre-boarding identity check | Must | Matched customer sees rider photo, name, rating, vehicle make/model/colour and prominent registration plate, with a reminder to verify the plate |
 | F34 | Pickup instructions and calls | Must | Customer may add a 160-character pickup note; assigned rider sees it and can call customer. Customer can call assigned rider |
+| F35 | Arrival clock and no-show | Must | Both parties see arrival waiting time. Rider can mark customer no-show only five minutes after server-recorded arrival; no fee is charged |
+| F36 | Two-sided trip safety | Must | Customer and rider can call 112, share a six-hour signed live trip link, and reach trip support during the active trip |
+| F37 | Direct UPI validation | Must | Driver may register a valid UPI ID without redoing vehicle review; completed-trip QR and deep link contain exact fare; handle is hidden during active trips |
+| F38 | Boarding safety reminder | Must | Bike: passenger helmet before PIN; Auto/Cab: seat belt reminder where fitted. Vehicle and plate identity remain visible before boarding |
 
 ## 6. Main user flows
 
@@ -97,7 +103,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 3. Search or tap the map. Pick Bike, Auto or Cab; see fare, distance, ETA. Optionally add a short pickup instruction.
 4. Tap **Book**; a radar pulse plays while searching.
 5. Rider accepts: show photo, name, rating, vehicle make/model/colour and large plate, plus call, cancel, live position and the customer-only trip PIN. Ask the customer to verify the plate before boarding.
-6. Track rider to pickup. Rider marks Arrived. Customer gives the 4-digit PIN only when boarding; a valid PIN is required before the server starts the trip. Then track toward drop. At trip end: fare summary, pay cash or UPI to rider, rate.
+6. Track rider to pickup. Rider marks Arrived; both apps show waiting time. Customer gives the 4-digit PIN only when boarding; a valid PIN is required before the server starts the trip. Then track toward drop. At trip end: fare summary, cash or direct UPI QR and app link if the driver registered a valid handle, then rating. The app never labels the fare paid without external confirmation.
 7. Trip appears in history with receipt.
 
 **6.2 AI-assisted booking**
@@ -109,7 +115,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 **6.3 Rider completes a trip**
 1. Sign up, enter name and mobile, licence number, plate, vehicle make/model/colour/year, document expiry dates and optional UPI ID. Upload licence, RC, selfie and insurance photos; Auto and Cab also upload a commercial permit. Status: Pending. Admin reviews every field and image. Expired documents prevent approval or going online.
 2. After approval: **Go Online**. Offer shows pickup distance, trip distance, fare, 15-s countdown, Accept/Decline.
-3. After acceptance, see customer name, pickup instruction, call button and a direct Google Maps navigation button to the exact pickup coordinate. Tap **Arrived**, ask the boarding customer for their PIN, and enter it to **Start**. Only after start does the direct Google Maps button target the drop coordinate. Tap **End trip**, collect payment, rate customer.
+3. After acceptance, see customer name, pickup instruction, call button and a direct Google Maps navigation button to the exact pickup coordinate. Either participant can share the trip or call 112. Tap **Arrived**; the server starts the wait clock. After five minutes without the customer, a no-show action becomes available. Otherwise ask the boarding customer for their PIN and enter it to **Start**. Only after start does the direct Google Maps button target the drop coordinate. Tap **End trip**, show a personal UPI QR or collect cash, verify payment outside Haan, and rate the customer.
 4. Earnings screen shows the day.
 
 **6.4 Admin support**
@@ -136,6 +142,8 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | Rider rejected | Reason shown; can fix and resubmit |
 | Missing or expired insurance/permit | Cannot be approved or go online; upload current documents and resubmit |
 | Wrong vehicle at pickup | Customer sees the plate and identifying details and can cancel or call support before boarding |
+| Customer does not arrive | No-show action is blocked until five minutes after server-recorded arrival, then ends the trip without a fee |
+| Invalid or absent driver UPI ID | Show cash/direct-payment guidance; no broken QR or payment button |
 | Driver photo unavailable on weak network | Vehicle details and plate stay visible; the trip continues |
 | App version too old | Blocking update screen with download link |
 
@@ -265,7 +273,7 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 9 | Languages and themes | Both languages and both themes on every screen; no untranslated text or unreadable contrast |
 | 10 | Failure handling | With network off or any quota hit, every screen shows a message, never a blank or crash |
 | 11 | Secrets | Zero keys in an APK, the website or the public repo |
-| 12 | Website | No login anywhere; both QR codes open the right Drive download; Lighthouse performance 90+ on mobile |
+| 12 | Website | No login anywhere; both QR codes open the verified versioned APK download (Pages until owner supplies Drive links); Lighthouse performance target 90+ on mobile |
 | 13 | Visuals | Every page has a living background and real pictures; signature moment and all 5 scroll moments work |
 | 14 | Cost | No service asked for a card or credits |
 | 15 | Pickup navigation | Accepted/arrived rider sees a Google Maps directions URL to the trip's exact pickup coordinates; Bike requests two-wheeler mode |
@@ -273,6 +281,10 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 17 | Vehicle identity | Matched customer sees name, photo (when available), rating, make/model/colour and plate; unassigned users cannot fetch the selfie |
 | 18 | Rider approval | Missing required profile field, insurance or relevant permit, expired document, or missing mobile blocks approval and online state |
 | 19 | Pickup and calls | Optional pickup note survives booking and reaches the rider; each assigned party can open a phone dialer for the other |
+| 20 | Arrival and no-show | Customer and rider see the arrival wait; API denies a no-show before five minutes and allows it after five minutes |
+| 21 | Payment handoff | Invalid UPI IDs are rejected; active trip hides the driver handle; completed trip offers an exact-fare QR and UPI app link when valid |
+| 22 | Safety on both sides | Assigned customer and rider can share a signed live link and call 112; outsiders cannot create a share link |
+| 23 | Boarding check | Both apps show a vehicle-appropriate helmet or seat belt reminder before trip start |
 
 ## 17. Open questions
 

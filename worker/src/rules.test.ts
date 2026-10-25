@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fare, haversineKm, normalizeVehicleNumber, scrubAssistantText, validCoordinates, validFutureDate, validImageBytes, validPoint } from './rules';
+import { fare, haversineKm, normalizeVehicleNumber, scrubAssistantText, validCoordinates, validFutureDate, validImageBytes, validPoint, validUpiId } from './rules';
 import { decryptTotp, encryptTotp, hmac, totp, totpSetupKey } from './crypto';
 
 describe('non-negotiable trip rules',()=>{
@@ -37,6 +37,11 @@ describe('non-negotiable trip rules',()=>{
     expect(validImageBytes(jpeg,'image/jpeg')).toBe(true);
     expect(validImageBytes(jpeg,'image/png')).toBe(false);
     expect(validImageBytes(new TextEncoder().encode('not a real jpeg').buffer,'image/jpeg')).toBe(false);
+  });
+  it('accepts UPI handles without unsafe payment characters',()=>{
+    expect(validUpiId('driver.123@upi')).toBe(true);
+    expect(validUpiId('bad handle@upi')).toBe(false);
+    expect(validUpiId('driver@upi&am=1')).toBe(false);
   });
 });
 

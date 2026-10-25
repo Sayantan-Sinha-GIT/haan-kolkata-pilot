@@ -40,6 +40,11 @@ check('registration complete',after,200,d=>d.profile.registration_complete===tru
 check('admin sees all four documents',await call(`/v1/admin/riders/${rider.id}`,'GET',undefined,adminToken),200,d=>['licence','rc','selfie','insurance'].every(k=>d.documents[k]));
 check('approval succeeds',await call(`/v1/admin/riders/${rider.id}/verify`,'POST',{decision:'approved'},adminToken),200);
 check('approved rider can go online',await call('/v1/rider/online','POST',{online:true,lat:22.5726,lng:88.3639}),200,d=>d.online===true);
+check('unsafe UPI handle rejected',await call('/v1/rider/profile','PATCH',{...profile,upi_id:'qa@upi&am=1'}),400);
+check('non-string UPI handle rejected',await call('/v1/rider/profile','PATCH',{...profile,upi_id:123}),400);
+check('UPI-only edit accepted',await call('/v1/rider/profile','PATCH',{...profile,upi_id:'qa.driver@upi'}),200,d=>d.profile.verification_status==='approved');
+check('UPI-only edit keeps document approval and online state',await call('/v1/rider/profile'),200,
+  d=>d.profile.verification_status==='approved'&&d.profile.registration_complete===true&&d.profile.is_online===true);
 check('rider offline',await call('/v1/rider/online','POST',{online:false}),200,d=>d.online===false);
 
 const email=`qa-auto-${randomUUID()}@haan.invalid`;

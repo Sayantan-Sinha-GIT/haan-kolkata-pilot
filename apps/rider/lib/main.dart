@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vibration/vibration.dart';
 import 'package:haan_core/haan_core.dart';
@@ -365,6 +366,19 @@ class _RiderHomeState extends State<RiderHome> {
       showMessage(context, app.language == 'hi' ? 'Google Maps नहीं खुला। ऐप में रास्ता देखें।' : 'Could not open Google Maps. Follow the in-app map.');
   }
 
+  Future<void> shareTrip() async {
+    if(trip==null)return;
+    try {
+      final result=await app.api.get('/v1/trips/${trip!['id']}/share');
+      final url='${result['url']}';
+      final sms=Uri(scheme:'sms',queryParameters:{'body':'Haan live trip: $url'});
+      if(!await launchUrl(sms,mode:LaunchMode.externalApplication)) {
+        await Clipboard.setData(ClipboardData(text:url));
+        if(mounted)showMessage(context,app.language=='hi'?'ट्रिप लिंक कॉपी हुआ।':'Trip link copied.');
+      }
+    } catch(e) {if(mounted)showMessage(context,'$e');}
+  }
+
   @override
   Widget build(BuildContext context) {
     final verified = riderProfile?['verification_status'] == 'approved' &&
@@ -538,6 +552,10 @@ class _RiderHomeState extends State<RiderHome> {
       if ('${trip!['pickup_note'] ?? ''}'.isNotEmpty)
         Card(child: Padding(padding: const EdgeInsets.all(12),
           child: Text('${app.tr('pickupNote')}: ${trip!['pickup_note']}'))),
+      if(status!='in_progress')
+        Text(trip!['vehicle_type']=='Bike'
+          ? (app.language=='hi'?'ग्राहक को यात्री हेलमेट दें, फिर PIN माँगें।':'Provide the passenger helmet before asking for the PIN.')
+          : (app.language=='hi'?'ग्राहक को सीट बेल्ट लगाने को कहें।':'Remind the customer to fasten their seat belt.')),
       const SizedBox(height: 6),
       Text('${trip!['vehicle_type']} · ₹${trip!['estimate_rupees']}',
           style: Theme.of(context).textTheme.titleMedium),
@@ -551,6 +569,20 @@ class _RiderHomeState extends State<RiderHome> {
       if (status == 'arrived')
         OutlinedButton.icon(onPressed: busy ? null : startWithPin,
           icon: const Icon(Icons.pin), label: Text(app.tr('askPin'))),
+      if (status == 'arrived') ...[
+        Text(() {
+          final at=DateTime.tryParse('${trip!['arrived_at']??''}');
+          final minutes=at==null?0:DateTime.now().difference(at).inMinutes.clamp(0,999);
+          return app.language=='hi'
+            ? 'पिकअप पर $minutes मिनट से इंतज़ार। 5 मिनट बाद नो-शो चुन सकते हैं।'
+            : 'Waiting at pickup for $minutes min. No-show is available after 5 min.';
+        }()),
+        if (DateTime.tryParse('${trip!['arrived_at']??''}')
+          ?.isBefore(DateTime.now().subtract(const Duration(minutes:5)))??false)
+          TextButton.icon(onPressed:busy?null:()=>tripAction('no-show'),
+            icon:const Icon(Icons.person_off),
+            label:Text(app.language=='hi'?'ग्राहक नहीं आए':'Customer did not arrive')),
+      ],
       if (status == 'in_progress')
         OutlinedButton.icon(onPressed: busy ? null : () => tripAction('complete'),
           icon: const Icon(Icons.check_circle), label: Text(app.tr('end'))),
@@ -558,6 +590,15 @@ class _RiderHomeState extends State<RiderHome> {
         TextButton.icon(
           onPressed: () => launchUrl(Uri(scheme: 'tel', path: '${trip!['customer_phone']}'), mode: LaunchMode.externalApplication),
           icon: const Icon(Icons.call), label: Text(app.tr('contact'))),
+      Wrap(spacing:8,children:[
+        TextButton.icon(onPressed:()=>launchUrl(Uri.parse('tel:112'),mode:LaunchMode.externalApplication),
+          icon:const Icon(Icons.sos),label:Text(app.tr('sos'))),
+        TextButton.icon(onPressed:shareTrip,icon:const Icon(Icons.share),label:Text(app.tr('share'))),
+        TextButton.icon(
+          onPressed:()=>Navigator.push(context,MaterialPageRoute(
+            builder:(_)=>RiderHelp(tripId:'${trip!['id']}'))),
+          icon:const Icon(Icons.support_agent),label:Text(app.tr('help'))),
+      ]),
       if (status != 'in_progress')
         TextButton(
             onPressed: () async {
@@ -950,6 +991,29 @@ class _RiderReceiptState extends State<RiderReceipt> {
                                     Theme.of(context).textTheme.displayMedium),
                             Text(app.tr('collect'))
                           ]))),
+              const SizedBox(height:16),
+              Builder(builder:(context){
+                final amount=(trip!['final_rupees'] as num?)?.toInt()
+                  ??(trip!['estimate_rupees'] as num?)?.toInt()??0;
+                final uri=directUpiUri(upiId:trip!['rider_upi_id'] as String?,
+                  name:trip!['rider_name'] as String?,amount:amount);
+                if(uri==null)return Text(app.language=='hi'
+                  ? 'UPI ID जोड़ने के लिए प्रोफ़ाइल खोलें। अभी नकद लें।'
+                  : 'Add a UPI ID in your profile to show a payment QR. Collect cash for now.');
+                return Card(child:Padding(padding:const EdgeInsets.all(18),
+                  child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Text(app.language=='hi'?'ग्राहक को यह UPI QR दिखाएँ':'Show this UPI QR to the customer',
+                      style:Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height:12),
+                    Center(child:QrImageView(data:uri.toString(),version:QrVersions.auto,
+                      size:190,backgroundColor:Colors.white,
+                      semanticsLabel:'UPI QR for ₹$amount')),
+                    SelectableText('${trip!['rider_upi_id']} · ₹$amount'),
+                    Text(app.language=='hi'
+                      ? 'भुगतान अपने UPI ऐप में जाँचें। Haan इसकी पुष्टि नहीं कर सकता।'
+                      : 'Check your own UPI app for payment. Haan cannot confirm it.'),
+                  ])));
+              }),
               Text(app.tr('rate')),
               Row(
                   children: List.generate(

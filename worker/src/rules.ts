@@ -16,6 +16,10 @@ export function validFutureDate(value: unknown, today = new Date().toISOString()
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
     && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value && value >= today;
 }
+export function validUpiId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 100
+    && /^[A-Za-z0-9._-]{2,64}@[A-Za-z0-9.-]{2,32}$/.test(value);
+}
 export type Fare = { base: number; per_km: number; per_min: number; minimum: number };
 export const DEFAULT_FARES: Record<Vehicle, Fare> = {
   Bike: { base: 20, per_km: 6, per_min: 0.5, minimum: 30 },

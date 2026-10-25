@@ -7,6 +7,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:haan_core/haan_core.dart';
 
@@ -641,6 +642,14 @@ class _RideHomeState extends State<RideHome> {
             '${trip?['pickup_text'] ?? pickupLabel} → ${trip?['drop_text'] ?? dropLabel}'),
         const SizedBox(height: 12),
         if (status == 'searching') const LinearProgressIndicator(),
+        if (status == 'arrived')
+          Text(() {
+            final at=DateTime.tryParse('${trip?['arrived_at']??''}');
+            final minutes=at==null?0:DateTime.now().difference(at).inMinutes.clamp(0,999);
+            return app.language=='hi'
+              ? 'ड्राइवर पहुँच गए हैं · $minutes मिनट से इंतज़ार। बैठने पर ही PIN दें।'
+              : 'Driver has arrived · waiting $minutes min. Share your PIN only when boarding.';
+          }(),style:Theme.of(context).textTheme.titleMedium),
         if (['accepted', 'arrived', 'in_progress'].contains(status)) ...[
           Card(
               child: Padding(
@@ -667,6 +676,10 @@ class _RideHomeState extends State<RideHome> {
                         SelectableText('${trip?['vehicle_number'] ?? ''}',
                           style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
                         Text(app.tr('verifyPlate')),
+                        if(status!='in_progress')
+                          Text(trip?['vehicle_type']=='Bike'
+                            ? (app.language=='hi'?'बैठने से पहले यात्री का हेलमेट पहनें और पट्टा बाँधें।':'Wear and fasten a passenger helmet before boarding.')
+                            : (app.language=='hi'?'बैठने के बाद सीट बेल्ट लगाएँ।':'Fasten your seat belt after boarding.')),
                         if (rider != null && status == 'accepted')
                           Text(() {
                             final km = const Distance().as(LengthUnit.Kilometer, rider!, pickup) * 1.3;
@@ -1080,6 +1093,38 @@ class _ReceiptPageState extends State<ReceiptPage> {
                                     Theme.of(context).textTheme.displaySmall),
                             Text(app.tr('payDirect'))
                           ]))),
+              const SizedBox(height: 20),
+              Builder(builder:(context){
+                final amount=(trip!['final_rupees'] as num?)?.toInt()
+                  ??(trip!['estimate_rupees'] as num?)?.toInt()??0;
+                final uri=directUpiUri(upiId:trip!['rider_upi_id'] as String?,
+                  name:trip!['rider_name'] as String?,amount:amount);
+                if(uri==null)return Text(app.language=='hi'
+                  ? 'नकद या ड्राइवर से सीधे UPI पर भुगतान करें।'
+                  : 'Pay cash or ask the driver for their direct UPI details.');
+                return Card(child:Padding(padding:const EdgeInsets.all(18),
+                  child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Text(app.language=='hi'?'सीधे ड्राइवर को UPI दें':'Pay the driver directly with UPI',
+                      style:Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height:12),
+                    Center(child:QrImageView(data:uri.toString(),version:QrVersions.auto,
+                      size:190,backgroundColor:Colors.white,
+                      semanticsLabel:'UPI QR for ₹$amount')),
+                    const SizedBox(height:8),
+                    SelectableText('${trip!['rider_upi_id']} · ₹$amount'),
+                    TextButton.icon(onPressed:() async {
+                      if(!await launchUrl(uri,mode:LaunchMode.externalApplication)&&context.mounted)
+                        showMessage(context,app.language=='hi'?'UPI ऐप नहीं खुला। QR स्कैन करें।':'UPI app did not open. Scan the QR instead.');
+                    },icon:const Icon(Icons.account_balance_wallet),
+                      label:Text(app.language=='hi'?'UPI ऐप खोलें':'Open UPI app')),
+                    TextButton.icon(onPressed:(){Clipboard.setData(ClipboardData(text:'${trip!['rider_upi_id']}'));
+                      showMessage(context,app.language=='hi'?'UPI ID कॉपी हुआ।':'UPI ID copied.');},
+                      icon:const Icon(Icons.copy),label:Text(app.language=='hi'?'UPI ID कॉपी करें':'Copy UPI ID')),
+                    Text(app.language=='hi'
+                      ? 'नाम और रकम जाँचें। Haan भुगतान की पुष्टि नहीं कर सकता।'
+                      : 'Verify the recipient and amount. Haan cannot confirm whether payment succeeded.'),
+                  ])));
+              }),
               const SizedBox(height: 20),
               Text(app.tr('rate')),
               Row(

@@ -6,8 +6,9 @@ const vars = Object.fromEntries(readFileSync(new URL('../worker/.dev.vars', impo
   .filter(line => /^[A-Z_]+=/.test(line)).map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
 if(new URL(vars.DATABASE_URL).hostname!=='ep-bold-sea-b3lygotf-pooler.c-4.ap-southeast-1.aws.neon.tech')throw new Error('Development database host mismatch');
 const sql = neon(vars.DATABASE_URL);
-const [rider] = await sql`select u.id,u.role from users u join rider_profiles rp on rp.user_id=u.id where u.email='rider.demo@haan.invalid' and rp.verification_status='approved'`;
+const [rider] = await sql`select u.id,u.role,rp.upi_id from users u join rider_profiles rp on rp.user_id=u.id where u.email='rider.demo@haan.invalid' and rp.verification_status='approved'`;
 if (!rider) throw new Error('Development fixture missing; refusing test writes');
+await sql`update rider_profiles set upi_id='qa.driver@upi' where user_id=${rider.id}::uuid`;
 const email = `qa-${randomUUID()}@haan.invalid`;
 const [customer] = await sql`insert into users(email,role,name,phone) values(${email},'customer','QA customer','9123456789') returning id,role`;
 const token = user => {
@@ -50,7 +51,7 @@ try {
   const offer = offers.offers.find(x=>x.trip_id===id);
   await expectStatus('offer accepted', await call(`/v1/rider/offers/${offer.id}/accept`,'POST',{},riderToken),200);
   await expectStatus('matched identity and pickup note visible',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,
-    d=>d.trip.pickup_note==='Meet by the north gate'&&d.trip.vehicle_number==='WB12AB1234'&&d.trip.vehicle_make==='Hero'&&d.trip.rider_phone==='9876543210');
+    d=>d.trip.pickup_note==='Meet by the north gate'&&d.trip.vehicle_number==='WB12AB1234'&&d.trip.vehicle_make==='Hero'&&d.trip.rider_phone==='9876543210'&&d.trip.rider_upi_id===null);
   await expectStatus('assigned driver can call customer',await call(`/v1/trips/${id}`,'GET',undefined,riderToken),200,d=>d.trip.customer_phone==='9123456789');
   const photo=async auth=>{const r=await fetch(`${base}/v1/trips/${id}/driver-photo`,{headers:auth?{Authorization:`Bearer ${auth}`}:{}});return {status:r.status,type:r.headers.get('content-type'),size:(await r.arrayBuffer()).byteLength}};
   const ownPhoto=await photo(customerToken);if(ownPhoto.status!==200||!ownPhoto.type?.startsWith('image/')||ownPhoto.size<1000)throw Error('Matched customer photo unavailable');checks++;console.log('PASS matched customer sees photo');
@@ -59,6 +60,7 @@ try {
   const [other]=await sql`insert into users(email,role,name) values(${`qa-other-${randomUUID()}@haan.invalid`},'customer','QA outsider') returning id,role`;
   const otherToken=token(other),otherPhoto=await photo(otherToken);
   if(otherPhoto.status!==404)throw Error('Unassigned customer photo authorization failed');checks++;console.log('PASS unassigned customer photo denied');
+  await expectStatus('outsider cannot create trip share link',await call(`/v1/trips/${id}/share`,'GET',undefined,otherToken),404);
   await call('/v1/profile','DELETE',undefined,otherToken);
   await expectStatus('route targets pickup before PIN',await call(`/v1/trips/${id}/route?lat=22.5726&lng=88.3639`,'GET',undefined,riderToken),200,d=>Number(d.target.lat)===pickup.lat);
   await expectStatus('double accept denied', await call(`/v1/rider/offers/${offer.id}/accept`,'POST',{},riderToken),409);
@@ -71,12 +73,15 @@ try {
   await expectStatus('location accepted', await call(`/v1/trips/${id}/location`,'POST',{lat:22.575,lng:88.36,heading:90},riderToken),200);
   await expectStatus('trip visible to customer', await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,data=>data.trip.status==='in_progress' && Number(data.location.lat)===22.575);
   const shared = await expectStatus('trip share link', await call(`/v1/trips/${id}/share`,'GET',undefined,customerToken),200,data=>data.url?.includes('/trip.html'));
+  await expectStatus('driver can share active trip', await call(`/v1/trips/${id}/share`,'GET',undefined,riderToken),200,data=>data.url?.includes('/trip.html'));
   const sharedUrl = new URL(shared.url);
   await expectStatus('anonymous signed share', await call(`/v1/shared/${id}${sharedUrl.search}`),200,data=>data.status==='in_progress');
   const badSig = new URLSearchParams(sharedUrl.search); badSig.set('sig','0'.repeat(64));
   await expectStatus('invalid share signature denied', await call(`/v1/shared/${id}?${badSig}`),404);
   await expectStatus('trip completed', await call(`/v1/trips/${id}/complete`,'POST',{final_km:1000},riderToken),200,data=>Number(data.trip.final_rupees)<=Number(created.trip.estimate_rupees)*1.5+0.5);
+  await expectStatus('shared link expires at trip end',await call(`/v1/shared/${id}${sharedUrl.search}`),404);
   await expectStatus('phone number hidden after trip',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,d=>d.trip.rider_phone===null);
+  await expectStatus('direct driver UPI available only after completion',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,d=>d.trip.rider_upi_id==='qa.driver@upi'&&Number(d.trip.final_rupees)>0);
   const oldPhoto=await photo(customerToken);if(oldPhoto.status!==404)throw Error('Completed trip photo should no longer be shared');checks++;console.log('PASS photo access ends with trip');
   await expectStatus('double completion denied', await call(`/v1/trips/${id}/complete`,'POST',{},riderToken),409);
   await expectStatus('customer rating', await call(`/v1/trips/${id}/rating`,'POST',{stars:5,comment:'QA'},customerToken),200);
@@ -97,9 +102,19 @@ try {
   }
   await expectStatus('correct PIN rejected after lock', await call(`/v1/trips/${secondId}/start`,'POST',{pin:second.pin},riderToken),423);
   await expectStatus('customer cancels locked trip', await call(`/v1/trips/${secondId}/cancel`,'POST',{reason:'PIN locked QA'},customerToken),200);
+  const third=await expectStatus('no-show trip created',await call('/v1/trips','POST',{pickup,drop,vehicle:'Bike',confirmed:true},customerToken),201);
+  const thirdOffers=await expectStatus('no-show offer listed',await call('/v1/rider/offers','GET',undefined,riderToken),200,d=>d.offers.some(x=>x.trip_id===third.trip.id));
+  const thirdOffer=thirdOffers.offers.find(x=>x.trip_id===third.trip.id);
+  await expectStatus('no-show offer accepted',await call(`/v1/rider/offers/${thirdOffer.id}/accept`,'POST',{},riderToken),200);
+  await expectStatus('no-show trip arrived',await call(`/v1/trips/${third.trip.id}/arrived`,'POST',{},riderToken),200);
+  await expectStatus('early no-show denied',await call(`/v1/trips/${third.trip.id}/no-show`,'POST',{},riderToken),409);
+  await sql`update trips set arrived_at=now()-interval '6 minutes' where id=${third.trip.id}::uuid`;
+  await expectStatus('driver no-show after wait',await call(`/v1/trips/${third.trip.id}/no-show`,'POST',{},riderToken),200);
+  await expectStatus('no-show trip cancelled',await call(`/v1/trips/${third.trip.id}`,'GET',undefined,customerToken),200,d=>d.trip.status==='cancelled');
   await expectStatus('completed trip cannot be cancelled', await call(`/v1/trips/${id}/cancel`,'POST',{reason:'too late'},customerToken),409);
   await expectStatus('account deletion', await call('/v1/profile','DELETE',undefined,customerToken),200);
   console.log(`PASS ${checks} development API checks`);
 } finally {
   await call('/v1/rider/online','POST',{online:false},riderToken).catch(()=>{});
+  await sql`update rider_profiles set upi_id=${rider.upi_id} where user_id=${rider.id}::uuid`;
 }

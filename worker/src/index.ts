@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { db, consumeLimit } from './db';
 import { hmac, randomDigits, randomToken, signAccess, verifyAccess, verifyPassword, decryptTotp, verifyTotp, passwordHash, newTotpSecret, encryptTotp, totpSetupKey } from './crypto';
-import { fare, haversineKm, normalizeVehicleNumber, validCoordinates, validFutureDate, validImageBytes, validPoint, scrubAssistantText, type Vehicle } from './rules';
+import { fare, haversineKm, normalizeVehicleNumber, validCoordinates, validFutureDate, validImageBytes, validPoint, validUpiId, scrubAssistantText, type Vehicle } from './rules';
 import { advanceMatch } from './matching';
 import { assistantIntent, broadcast, routeEstimate, searchPlaces, sendEmail, transcribe, TripRoom } from './services';
 import { sendPush } from './push';
@@ -206,7 +206,8 @@ api.get('/v1/trips/:id', async c => {
     t.estimated_km,t.estimated_min,t.estimate_rupees,t.final_rupees,t.created_at,t.accepted_at,t.arrived_at,t.started_at,t.completed_at,
     ru.name as rider_name,case when t.status in ('accepted','arrived','in_progress') then ru.phone end as rider_phone,
     cu.name as customer_name,case when t.status in ('accepted','arrived','in_progress') then cu.phone end as customer_phone,
-    rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,rp.rating_avg
+    rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,rp.rating_avg,
+    case when t.status='completed' and rp.upi_id <> '' then rp.upi_id end as rider_upi_id
     from trips t left join users ru on ru.id=t.rider_id left join users cu on cu.id=t.customer_id
     left join rider_profiles rp on rp.user_id=t.rider_id where t.id=${id}::uuid`;
   if(!trip || (user.role==='customer'&&trip.customer_id!==user.id) || (user.role==='rider'&&trip.rider_id!==user.id))return error('Trip not found.','not_found',404);
@@ -236,10 +237,12 @@ api.get('/v1/trips/:id/route', async c => {
   return c.json({...(await routeEstimate(c.env,origin,target,trip.vehicle_type as Vehicle)),target});
 });
 api.get('/v1/trips/:id/share', async c => {
-  const user=await requireRole(c.env,c.req.raw,['customer']);if(isResponse(user))return user;
+  const user=await requireRole(c.env,c.req.raw,['customer','rider']);if(isResponse(user))return user;
   const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
-  const [trip]=await db(c.env)`select customer_id,status from trips where id=${id}::uuid`;
-  if(!trip||trip.customer_id!==user.id||!['searching','accepted','arrived','in_progress'].includes(trip.status))return error('Trip cannot be shared.','not_shareable',404);
+  const [trip]=await db(c.env)`select customer_id,rider_id,status from trips where id=${id}::uuid`;
+  const allowed=trip && (user.role==='customer' ? trip.customer_id===user.id : trip.rider_id===user.id);
+  if(!allowed||!['searching','accepted','arrived','in_progress'].includes(trip.status)
+    ||(user.role==='rider'&&trip.status==='searching'))return error('Trip cannot be shared.','not_shareable',404);
   const expires=Math.floor(Date.now()/1000)+6*3600;
   const sig=await hmac(c.env.SESSION_SECRET,`share:${id}:${expires}`);
   return c.json({url:`${c.env.APP_ORIGIN}/trip.html?id=${id}&expires=${expires}&sig=${sig}`,expires});
@@ -250,7 +253,7 @@ api.get('/v1/shared/:id', async c => {
   if(!await consumeLimit(c.env,`shared:${ip(c.req.raw)}`,60,60))return error('Please try again shortly.','rate_limited',429);
   if(await hmac(c.env.SESSION_SECRET,`share:${id}:${expires}`)!==sig)return error('This link is invalid.','invalid_link',404);
   const [trip]=await db(c.env)`select status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng,created_at from trips where id=${id}::uuid`;
-  if(!trip)return error('Trip not found.','not_found',404);
+  if(!trip||!['searching','accepted','arrived','in_progress'].includes(trip.status))return error('This trip link is no longer active.','expired_link',404);
   const [location]=await db(c.env)`select lat,lng,recorded_at from trip_locations where trip_id=${id}::uuid order by recorded_at desc limit 1`;
   return c.json({status:trip.status,vehicle:trip.vehicle_type,pickup:{lat:trip.pickup_lat,lng:trip.pickup_lng},drop:{lat:trip.drop_lat,lng:trip.drop_lng},rider_location:location||null,updated_at:location?.recorded_at||trip.created_at});
 });
@@ -307,6 +310,15 @@ api.post('/v1/trips/:id/arrived',async c=>{
   const rows=await db(c.env)`update trips set status='arrived',arrived_at=now() where id=${id}::uuid and rider_id=${user.id}::uuid and status='accepted' returning id`;
   if(!rows.length)return error('Trip is not ready for arrival.','invalid_state',409);
   await broadcast(c.env,id,{status:'arrived'});return c.json({ok:true});
+});
+api.post('/v1/trips/:id/no-show',async c=>{
+  const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
+  const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
+  const rows=await db(c.env)`update trips set status='cancelled',cancelled_by=${user.id}::uuid,
+    cancel_reason='Customer did not arrive' where id=${id}::uuid and rider_id=${user.id}::uuid
+    and status='arrived' and arrived_at<=now()-interval '5 minutes' returning id`;
+  if(!rows.length)return error('Wait five minutes after arrival before marking a no-show.','wait_required',409);
+  await broadcast(c.env,id,{status:'cancelled'});return c.json({ok:true});
 });
 api.post('/v1/trips/:id/start',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
@@ -477,14 +489,17 @@ api.patch('/v1/rider/profile',async c=>{
   const plate=normalizeVehicleNumber(input.vehicle_number);
   const make=input.vehicle_make?.trim(),model=input.vehicle_model?.trim(),color=input.vehicle_color?.trim();
   const licence=input.licence_number?.trim().toUpperCase();
+  if(input.upi_id!==undefined&&typeof input.upi_id!=='string')return error('Enter a valid UPI ID or leave it blank for cash only.','invalid_upi');
+  const upi=(input.upi_id||'').trim();
   if(!['Bike','Auto','Cab'].includes(input.vehicle_type||'')||!plate||!make||make.length<2||make.length>40||!model||model.length<2||model.length>50
     ||!color||color.length<3||color.length>30||!Number.isInteger(input.vehicle_year)||input.vehicle_year!<1995||input.vehicle_year!>new Date().getUTCFullYear()+1
     ||!licence||!/^[A-Z0-9/-]{6,24}$/.test(licence)||!validFutureDate(input.insurance_expiry)
     ||(input.vehicle_type!=='Bike'&&!validFutureDate(input.permit_expiry)))return error('Check the vehicle, licence and document expiry details.','invalid_vehicle');
+  if(upi&&!validUpiId(upi))return error('Enter a valid UPI ID or leave it blank for cash only.','invalid_upi');
   const [profile]=await db(c.env)`insert into rider_profiles(user_id,vehicle_type,vehicle_number,vehicle_make,vehicle_model,vehicle_color,vehicle_year,
       licence_number,insurance_expiry,permit_expiry,upi_id)
     values(${user.id}::uuid,${input.vehicle_type}::vehicle_type,${plate},${make},${model},${color},${input.vehicle_year!},
-      ${licence},${input.insurance_expiry!}::date,${input.vehicle_type==='Bike'?null:input.permit_expiry!}::date,${(input.upi_id||'').slice(0,100)})
+      ${licence},${input.insurance_expiry!}::date,${input.vehicle_type==='Bike'?null:input.permit_expiry!}::date,${upi})
     on conflict(user_id) do update set vehicle_type=excluded.vehicle_type,vehicle_number=excluded.vehicle_number,
       vehicle_make=excluded.vehicle_make,vehicle_model=excluded.vehicle_model,vehicle_color=excluded.vehicle_color,vehicle_year=excluded.vehicle_year,
       licence_number=excluded.licence_number,insurance_expiry=excluded.insurance_expiry,permit_expiry=excluded.permit_expiry,upi_id=excluded.upi_id,
@@ -497,7 +512,26 @@ api.patch('/v1/rider/profile',async c=>{
         then null else rider_profiles.insurance_key end,
       permit_key=case when rider_profiles.permit_expiry is not null and rider_profiles.permit_expiry is distinct from excluded.permit_expiry
         then null else rider_profiles.permit_key end,
-      verification_status='pending',rejection_reason=null,is_online=false returning vehicle_type,vehicle_number,verification_status`;
+      verification_status=case when rider_profiles.vehicle_number is distinct from excluded.vehicle_number
+        or rider_profiles.vehicle_type is distinct from excluded.vehicle_type or rider_profiles.vehicle_make is distinct from excluded.vehicle_make
+        or rider_profiles.vehicle_model is distinct from excluded.vehicle_model or rider_profiles.vehicle_color is distinct from excluded.vehicle_color
+        or rider_profiles.vehicle_year is distinct from excluded.vehicle_year
+        or rider_profiles.licence_number is distinct from excluded.licence_number or rider_profiles.insurance_expiry is distinct from excluded.insurance_expiry
+        or rider_profiles.permit_expiry is distinct from excluded.permit_expiry then 'pending'::verification_status
+        else rider_profiles.verification_status end,
+      rejection_reason=case when rider_profiles.vehicle_number is distinct from excluded.vehicle_number
+        or rider_profiles.vehicle_type is distinct from excluded.vehicle_type or rider_profiles.vehicle_make is distinct from excluded.vehicle_make
+        or rider_profiles.vehicle_model is distinct from excluded.vehicle_model or rider_profiles.vehicle_color is distinct from excluded.vehicle_color
+        or rider_profiles.vehicle_year is distinct from excluded.vehicle_year or rider_profiles.licence_number is distinct from excluded.licence_number
+        or rider_profiles.insurance_expiry is distinct from excluded.insurance_expiry
+        or rider_profiles.permit_expiry is distinct from excluded.permit_expiry then null else rider_profiles.rejection_reason end,
+      is_online=case when rider_profiles.vehicle_number is distinct from excluded.vehicle_number
+        or rider_profiles.vehicle_type is distinct from excluded.vehicle_type or rider_profiles.vehicle_make is distinct from excluded.vehicle_make
+        or rider_profiles.vehicle_model is distinct from excluded.vehicle_model or rider_profiles.vehicle_color is distinct from excluded.vehicle_color
+        or rider_profiles.vehicle_year is distinct from excluded.vehicle_year
+        or rider_profiles.licence_number is distinct from excluded.licence_number or rider_profiles.insurance_expiry is distinct from excluded.insurance_expiry
+        or rider_profiles.permit_expiry is distinct from excluded.permit_expiry then false else rider_profiles.is_online end
+      returning vehicle_type,vehicle_number,verification_status`;
   return c.json({profile});
 });
 api.post('/v1/rider/documents/:kind',async c=>{
