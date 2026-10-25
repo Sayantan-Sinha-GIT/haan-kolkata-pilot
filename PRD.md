@@ -82,7 +82,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F22 | Trip history and receipts | Should | Cached offline |
 | F23 | Ratings both ways | Should | 1-5 stars, optional comment |
 | F24 | SOS: share live trip link, 112 shortcut | Should | Prompts for emergency contact if missing |
-| F25 | Rider fare summary | Should | Today/week completed-trip totals; never imply cash or UPI was received without external confirmation |
+| F25 | Rider earnings summary | Should | Kolkata-calendar-day/week rider earnings after Haan's fee, today's Haan fee, and separate pending amounts owed to and from Haan; cancelled trips show no earnings; never imply cash or UPI was received without external confirmation |
 | F26 | Low-data mode (rider) | Should | Location every 5 s moving, 15 s idle, batch on poor network |
 | F27 | Editable fare config | Should | No redeploy; `super_admin` only |
 | F28 | Admin dashboard and quota counters | Should | Ola, Gemini, Groq, email, storage usage; alert at 80% |

@@ -793,11 +793,13 @@ api.post('/v1/rider/heartbeat',async c=>{
 });
 api.get('/v1/rider/earnings',async c=>{
   const user=await requireRole(c.env,c.req.raw,['rider']);if(isResponse(user))return user;
-  const [totals]=await db(c.env)`select coalesce(sum(s.rider_earnings_rupees) filter(where t.completed_at>=date_trunc('day',now())),0)::int as today,
-    coalesce(sum(s.rider_earnings_rupees) filter(where t.completed_at>=date_trunc('week',now())),0)::int as week,
-    coalesce(sum(s.platform_fee_rupees) filter(where t.completed_at>=date_trunc('day',now())),0)::int as today_platform_fee,
-    coalesce(sum(s.net_due_to_platform_rupees) filter(where s.status='pending'),0)::int as pending_net_due_to_platform,
-    count(*) filter(where t.completed_at>=date_trunc('day',now()))::int as trips_today
+  const [totals]=await db(c.env)`select
+    coalesce(sum(s.rider_earnings_rupees) filter(where (t.completed_at at time zone 'Asia/Kolkata')::date=(now() at time zone 'Asia/Kolkata')::date),0)::int as today,
+    coalesce(sum(s.rider_earnings_rupees) filter(where date_trunc('week',t.completed_at at time zone 'Asia/Kolkata')=date_trunc('week',now() at time zone 'Asia/Kolkata')),0)::int as week,
+    coalesce(sum(s.platform_fee_rupees) filter(where (t.completed_at at time zone 'Asia/Kolkata')::date=(now() at time zone 'Asia/Kolkata')::date),0)::int as today_platform_fee,
+    coalesce(sum(greatest(s.net_due_to_platform_rupees,0)) filter(where s.status='pending'),0)::int as pending_to_haan,
+    coalesce(sum(greatest(-s.net_due_to_platform_rupees,0)) filter(where s.status='pending'),0)::int as pending_from_haan,
+    count(*) filter(where (t.completed_at at time zone 'Asia/Kolkata')::date=(now() at time zone 'Asia/Kolkata')::date)::int as trips_today
     from trips t join trip_settlements s on s.trip_id=t.id where t.rider_id=${user.id}::uuid and t.status='completed'`;
   return c.json({earnings:totals});
 });

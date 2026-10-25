@@ -956,8 +956,8 @@ class _RiderEarningsState extends State<RiderEarnings> {
                                   style: Theme.of(context)
                                       .textTheme
                                       .displayMedium),
-                              Text('${data!['trips_today']} trips')
-                              ,Text(app.language=='hi'
+                              Text('${data!['trips_today']} trips'),
+                              Text(app.language=='hi'
                                   ? 'आज Haan शुल्क ₹${data!['today_platform_fee']}'
                                   : 'Haan fees today ₹${data!['today_platform_fee']}')
                             ]))),
@@ -973,8 +973,8 @@ class _RiderEarningsState extends State<RiderEarnings> {
                                       Theme.of(context).textTheme.displayMedium)
                             ]))),
                 Text(app.language=='hi'
-                  ? 'बकाया सेटलमेंट ₹${data!['pending_net_due_to_platform']} (धनात्मक: Haan को दें, ऋणात्मक: Haan से लें)। ग्राहक का भुगतान अलग से जाँचें।'
-                  : 'Pending settlement ₹${data!['pending_net_due_to_platform']} (positive: remit to Haan; negative: Haan owes you). Verify customer payment separately.'),
+                  ? 'Haan को देना बाकी ₹${data!['pending_to_haan']} · Haan से लेना बाकी ₹${data!['pending_from_haan']}. ग्राहक का भुगतान अलग से जाँचें।'
+                  : 'Pending to Haan ₹${data!['pending_to_haan']} · Haan owes you ₹${data!['pending_from_haan']}. Verify customer payment separately.'),
                 Text(app.tr('payDirect'))
               ])));
 }
@@ -1020,8 +1020,8 @@ class _RiderHistoryState extends State<RiderHistory> {
                                       '${t['pickup_text']} → ${t['drop_text']}'),
                                   subtitle: Text(
                                       '${t['status']} · ${t['created_at']}'),
-                                  trailing: Text(
-                                      '₹${t['rider_earnings_rupees'] ?? ((t['estimate_rupees'] as num).toInt()*0.8).round()}'),
+                                  trailing: Text(t['status']=='completed'
+                                      ? '₹${t['rider_earnings_rupees'] ?? '—'}' : '—'),
                                   onTap: () => Navigator.push(
                                       context,
                                       MaterialPageRoute(

@@ -82,6 +82,10 @@ try {
     Number(data.trip.final_rupees)<=Number(created.trip.estimate_rupees)*1.5+0.5&&
     Number(data.trip.platform_fee_rupees)===Math.round(Number(data.trip.customer_final_rupees)*.2)&&
     Number(data.trip.rider_earnings_rupees)+Number(data.trip.platform_fee_rupees)===Number(data.trip.customer_final_rupees));
+  await expectStatus('rider earnings separates pending balances',await call('/v1/rider/earnings','GET',undefined,riderToken),200,data=>
+    Number(data.earnings.today)>=0&&Number(data.earnings.pending_to_haan)>=0&&
+    Number(data.earnings.pending_from_haan)>=0&&
+    data.earnings.pending_net_due_to_platform===undefined);
   await expectStatus('shared link expires at trip end',await call(`/v1/shared/${id}${sharedUrl.search}`),404);
   await expectStatus('phone number hidden after trip',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,d=>d.trip.rider_phone===null);
   await expectStatus('direct driver UPI available only after completion',await call(`/v1/trips/${id}`,'GET',undefined,customerToken),200,d=>d.trip.rider_upi_id==='qa.driver@upi'&&Number(d.trip.final_rupees)>0);

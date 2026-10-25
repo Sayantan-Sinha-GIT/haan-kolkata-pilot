@@ -1219,8 +1219,11 @@ class _TripHistoryState extends State<TripHistory> {
                                     maxLines: 2),
                                 subtitle: Text(
                                     '${t['vehicle_type']} · ${t['status']} · ${t['created_at']}'),
-                                trailing: Text(
-                                    '₹${t['customer_final_rupees'] ?? t['final_rupees'] ?? t['estimate_rupees']}'),
+                                trailing: Text(t['status']=='completed'
+                                    ? '₹${t['customer_final_rupees'] ?? t['final_rupees'] ?? '—'}'
+                                    : t['status']=='cancelled'||t['status']=='no_riders_found'
+                                        ? '—'
+                                        : 'Est. ₹${t['estimate_rupees']}'),
                                 onTap: () => Navigator.push(
                                     context,
                                     MaterialPageRoute(
