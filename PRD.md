@@ -269,7 +269,7 @@ Hindi, English and Hinglish are required.
 
 - Apps: Android 8+, mid-range phones; APK under about 25 MB per ABI (split per ABI, arm64 offered); cold start under 3 s; release APKs signed with one fixed key, backed up.
 - Website and admin: responsive in current Chrome, Edge, Safari, Firefox; admin designed for desktop.
-- No iOS. APKs live on your personal Drive; links and QR codes come from one `links.json` so they change without code edits. The install guide (English and Hindi, with screenshots) explains "unknown sources" and Drive's scan warning on large files.
+- No iOS. APKs live on your personal Drive; download buttons read `links.json`, and QR PNGs are generated from that same file whenever links change. The install guide (English and Hindi, with screenshots) explains Android install permissions and possible Drive scan warnings.
 
 ## 14. Languages and accessibility
 

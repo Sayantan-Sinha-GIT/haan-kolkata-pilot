@@ -133,11 +133,10 @@ ScrollTrigger.create({trigger:T,start:'top 85%',end:'bottom 10%',onToggle:s=>s.i
 
 $$('.q button').forEach(b=>b.onclick=()=>{const q=b.parentElement,o=q.hasAttribute('data-o');o?q.removeAttribute('data-o'):q.setAttribute('data-o','');b.setAttribute('aria-expanded',!o);gsap.to($('.a',q),{height:o?0:'auto',duration:RM?0:.5,ease:'power3.inOut',onComplete:()=>ScrollTrigger.refresh()})});
 
-$$('.qr svg').forEach(s=>s.remove());
 if(!RM)$$('.dl').forEach(d=>{const m=$('.mkr',d),ln=$('.rl2 i',d),ar=$('.arr',d),pg=$('.ping',d);gsap.set(ar,{autoAlpha:0});
 gsap.timeline({scrollTrigger:{trigger:d,start:'top 92%',end:'top 38%',scrub:true}}).fromTo(ln,{scaleY:0},{scaleY:1,ease:'none',duration:1},0).fromTo(m,{top:'0%'},{top:'100%',ease:'none',duration:1},0).to(ar,{autoAlpha:1,y:-4,duration:.15},.95).fromTo(pg,{scale:1,opacity:.9},{scale:1.5,opacity:0,duration:.3},.97)});
-fetch('links.json').then(r=>r.json()).then(j=>$$('[data-k]').forEach(async a=>{const key=a.dataset.k,url=j[key],qr=$('.qr',a.closest('.dl'));
-if(typeof url==='string'&&/^https:\/\//.test(url)){a.href=url;a.rel='noopener';qr.innerHTML=await QRCode.toString(url,{type:'svg',margin:0,width:170,color:{dark:'#0a0907',light:'#f4efe4'}})+'<u class="ping"></u>'}
+fetch('links.json').then(r=>r.json()).then(j=>$$('[data-k]').forEach(a=>{const key=a.dataset.k,url=j[key],qr=$('.qr',a.closest('.dl'));
+if(typeof url==='string'&&/^https:\/\//.test(url)){a.href=url;a.rel='noopener'}
 else{a.removeAttribute('href');a.setAttribute('aria-disabled','true');a.onclick=e=>e.preventDefault();a.querySelector('span').textContent=L==='hi'?'डाउनलोड लिंक उपलब्ध नहीं':'Download link unavailable';qr.innerHTML='<span class="qr-wait">APK link not configured</span>';}
 })).catch(()=>{});
 

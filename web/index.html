@@ -185,7 +185,7 @@ input[type=range]{width:100%;accent-color:var(--acc);height:36px;background:none
 .rl2{position:relative;width:2px;height:120px;margin-bottom:-4px}.rl2 i{position:absolute;inset:0;background:var(--acc);transform-origin:top}
 .mkr{position:absolute;left:50%;top:100%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 4px rgba(var(--p1),.25)}
 .dl.g .rl2 i,.dl.g .mkr{background:var(--rd)}.dl.g .mkr{box-shadow:0 0 0 4px rgba(56,224,160,.25)}
-.qr{position:relative;width:190px;height:190px;padding:10px;background:#f4efe4;border-radius:12px}.qr svg{width:100%;height:100%;display:block}
+.qr{position:relative;width:190px;height:190px;padding:10px;background:#f4efe4;border-radius:12px}.qr img{width:100%;height:100%;display:block}
 .ping{position:absolute;inset:-6px;border-radius:16px;border:3px solid var(--acc);opacity:0;pointer-events:none}.dl.g .ping{border-color:var(--rd)}
 .arr{font:500 12px var(--fm);letter-spacing:.14em;text-transform:uppercase;color:var(--acct)}.dl.g .arr{color:var(--rdt)}
 .gd{text-align:center;margin:56px auto 0;max-width:40em;color:var(--mut)}.gd a{color:var(--fg)}
@@ -464,8 +464,8 @@ input[type=range]{width:100%;accent-color:var(--acc);height:36px;background:none
 <p class="kick" data-hi="10 · डाउनलोड">10 · Download</p>
 <h2 class="sp" data-hi="आपकी राइड<br><em>पहुँच रही है।</em>">Your ride is<br><em>arriving.</em></h2>
 <div class="dls">
-<div class="dl"><div class="rl2" aria-hidden="true"><i></i><b class="mkr"></b></div><div class="qr" role="img" aria-label="QR code for the customer app download"><svg viewBox="0 0 29 29"></svg><u class="ping"></u></div><span class="arr" data-hi="पहुँच गए">Arrived</span><h3 data-hi="ग्राहक ऐप">Customer app</h3><p data-hi="बुक कीजिए, ट्रैक कीजिए, राइडर को भुगतान कीजिए, रेटिंग दीजिए।">Book, track, pay the rider, rate.</p><a class="btn mag" href="#download" data-k="customer"><span data-hi="APK डाउनलोड">Download APK</span></a><small data-hi="Android 8+ · arm64 उपलब्ध">Android 8+ · arm64 available</small></div>
-<div class="dl g"><div class="rl2" aria-hidden="true"><i></i><b class="mkr"></b></div><div class="qr" role="img" aria-label="QR code for the rider app download"><svg viewBox="0 0 29 29"></svg><u class="ping"></u></div><span class="arr" data-hi="पहुँच गए">Arrived</span><h3 data-hi="राइडर ऐप">Rider app</h3><p data-hi="ऑनलाइन आइए, स्वीकारिए, नेविगेट कीजिए, सफ़र पूरा कीजिए। राइडर को ऑनलाइन जाने से पहले मंज़ूरी मिलती है।">Go online, accept, navigate, complete. Riders are approved before they can go online.</p><a class="btn gr mag" href="#download" data-k="rider"><span data-hi="APK डाउनलोड">Download APK</span></a><small data-hi="Android 8+ · arm64 उपलब्ध">Android 8+ · arm64 available</small></div>
+<div class="dl"><div class="rl2" aria-hidden="true"><i></i><b class="mkr"></b></div><div class="qr" role="img" aria-label="QR code for the customer app download"><img src="qr/Haan-Customer-Download-QR.png" alt="" width="170" height="170" loading="lazy"><u class="ping"></u></div><span class="arr" data-hi="पहुँच गए">Arrived</span><h3 data-hi="ग्राहक ऐप">Customer app</h3><p data-hi="बुक कीजिए, ट्रैक कीजिए, राइडर को भुगतान कीजिए, रेटिंग दीजिए।">Book, track, pay the rider, rate.</p><a class="btn mag" href="#download" data-k="customer"><span data-hi="APK डाउनलोड">Download APK</span></a><small data-hi="Android 8+ · arm64 उपलब्ध">Android 8+ · arm64 available</small></div>
+<div class="dl g"><div class="rl2" aria-hidden="true"><i></i><b class="mkr"></b></div><div class="qr" role="img" aria-label="QR code for the rider app download"><img src="qr/Haan-Rider-Download-QR.png" alt="" width="170" height="170" loading="lazy"><u class="ping"></u></div><span class="arr" data-hi="पहुँच गए">Arrived</span><h3 data-hi="राइडर ऐप">Rider app</h3><p data-hi="ऑनलाइन आइए, स्वीकारिए, नेविगेट कीजिए, सफ़र पूरा कीजिए। राइडर को ऑनलाइन जाने से पहले मंज़ूरी मिलती है।">Go online, accept, navigate, complete. Riders are approved before they can go online.</p><a class="btn gr mag" href="#download" data-k="rider"><span data-hi="APK डाउनलोड">Download APK</span></a><small data-hi="Android 8+ · arm64 उपलब्ध">Android 8+ · arm64 available</small></div>
 </div>
 <p class="gd rv" data-hi="इंस्टॉल का तरीका नहीं पता? <a href='install.html'>इंस्टॉल गाइड</a> Android की अनुमति और APK चेतावनी समझाती है, English और हिन्दी में।">Not sure how to install? The <a href="install.html">install guide</a> explains Android permissions and APK warnings, in English and Hindi.</p>
 </div>
@@ -478,7 +478,6 @@ input[type=range]{width:100%;accent-color:var(--acc);height:36px;background:none
 <script defer src="vendor/gsap.min.js"></script>
 <script defer src="vendor/ScrollTrigger.min.js"></script>
 <script defer src="vendor/lenis.min.js"></script>
-<script defer src="vendor/qrcode.min.js"></script>
 <script defer src="main.js"></script>
 </body>
 </html>

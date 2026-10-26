@@ -31,7 +31,7 @@ cd apps/customer && flutter pub get && flutter analyze --no-fatal-infos
 cd ../rider && flutter pub get && flutter analyze --no-fatal-infos
 ```
 
-The website is static: serve `web/` with any local HTTP server. Set `web/config.json` to the deployed Worker URL for the admin console. `web/links.json` points to versioned APK assets in `web/downloads/` (ignored by Git); the page generates its QR codes from those exact URLs. Replace the links with personal Drive URLs after uploading the APKs and the release signing key backup there.
+The website is static: serve `web/` with any local HTTP server. Set `web/config.json` to the deployed Worker URL for the admin console. `web/links.json` points to the publicly downloadable customer and rider APKs on Google Drive. The download buttons read those URLs; `node scripts/generate-download-qrs.mjs` makes matching PNG QR codes in the project root and `web/qr/`. Run the generator whenever the links change, then verify both anonymous downloads against the signed APK hashes before deploying.
 
 ## Secrets and build values
 
@@ -48,7 +48,7 @@ Google sign-in uses the Haan Firebase Auth project and its public web OAuth clie
 3. Configure nonzero free-tier quotas and Worker secrets, then deploy the Worker and verify `/health` and the fare endpoint. The quotas stop provider calls at 80% of the configured daily allowance. Database, session, and admin TOTP secrets are already set in the deployed Worker.
 4. Set `APP_ORIGIN` to the exact Cloudflare Pages origin. Configure the same Worker URL in `web/config.json`.
 5. Enroll the already-created super admin in an authenticator and verify the `/4632/admin/` console. A live TOTP login and dashboard request have passed. The path is only obscurity; backend password, TOTP, role checks, 30-minute idle timeout and audit log enforce security.
-6. Build and emulator-test both apps with one fixed release signing key. Back the key up securely. Upload signed arm64 APKs to a personal Drive with public download links, then update `web/links.json` and recheck both QR codes. Pages can host verified APKs temporarily until Drive is connected.
+6. Build and emulator-test both apps with one fixed release signing key. Back the key up securely. Upload signed arm64 APKs to a personal Drive with public download links, update `web/links.json`, run `node scripts/generate-download-qrs.mjs`, and verify the Drive downloads and both QR codes.
 7. Deploy `web/` to Cloudflare Pages. Check a fresh Android 8+ device, two-phone trip, Hindi/English flows, weak/offline behavior and Lighthouse before inviting pilot users.
 
 ## Design credits
