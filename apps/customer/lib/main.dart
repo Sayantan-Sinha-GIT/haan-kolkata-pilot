@@ -200,17 +200,21 @@ class CustomerShell extends StatefulWidget {
 
 class _CustomerShellState extends State<CustomerShell> {
   int tab = 0;
+  final historyKey = GlobalKey<_TripHistoryState>();
   @override
   Widget build(BuildContext context) => Scaffold(
       body: IndexedStack(index: tab, children: [
         RideHome(),
-        TripHistory(),
+        TripHistory(key: historyKey),
         CustomerHelp(),
         CustomerProfile()
       ]),
       bottomNavigationBar: NavigationBar(
           selectedIndex: tab,
-          onDestinationSelected: (v) => setState(() => tab = v),
+          onDestinationSelected: (v) {
+            setState(() => tab = v);
+            if (v == 1) historyKey.currentState?.load();
+          },
           destinations: [
             NavigationDestination(
                 icon: const Icon(Icons.map_outlined),
@@ -1184,9 +1188,9 @@ class _TripHistoryState extends State<TripHistory> {
   Future<void> load() async {
     try {
       final d = await app.api.get('/v1/trips/history');
-      setState(() => trips = d['trips'] as List);
+      if (mounted) setState(() { trips = d['trips'] as List; error = null; });
     } catch (e) {
-      setState(() => error = '$e');
+      if (mounted) setState(() => error = '$e');
     }
   }
 

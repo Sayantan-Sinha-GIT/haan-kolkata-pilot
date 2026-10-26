@@ -149,19 +149,25 @@ class RiderShell extends StatefulWidget {
 
 class _RiderShellState extends State<RiderShell> {
   int tab = 0;
+  final earningsKey = GlobalKey<_RiderEarningsState>();
+  final historyKey = GlobalKey<_RiderHistoryState>();
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<bool>(
       valueListenable: incomingOffer,
       builder: (context, offering, _) => Scaffold(
       body: IndexedStack(index: offering ? 0 : tab, children: [
         RiderHome(),
-        RiderEarnings(),
-        RiderHistory(),
+        RiderEarnings(key: earningsKey),
+        RiderHistory(key: historyKey),
         RiderAccount()
       ]),
       bottomNavigationBar: offering ? null : NavigationBar(
           selectedIndex: tab,
-          onDestinationSelected: (v) => setState(() => tab = v),
+          onDestinationSelected: (v) {
+            setState(() => tab = v);
+            if (v == 1) earningsKey.currentState?.load();
+            if (v == 2) historyKey.currentState?.load();
+          },
           destinations: [
             NavigationDestination(
                 icon: const Icon(Icons.two_wheeler), label: app.tr('home')),
@@ -926,9 +932,9 @@ class _RiderEarningsState extends State<RiderEarnings> {
   Future<void> load() async {
     try {
       final d = await app.api.get('/v1/rider/earnings');
-      setState(() => data = Map<String, dynamic>.from(d['earnings']));
+      if (mounted) setState(() { data = Map<String, dynamic>.from(d['earnings']); error = null; });
     } catch (e) {
-      setState(() => error = '$e');
+      if (mounted) setState(() => error = '$e');
     }
   }
 
@@ -996,7 +1002,7 @@ class _RiderHistoryState extends State<RiderHistory> {
   Future<void> load() async {
     try {
       final d = await app.api.get('/v1/trips/history');
-      setState(() => trips = d['trips'] as List);
+      if (mounted) setState(() => trips = d['trips'] as List);
     } catch (e) {
       if (mounted) showMessage(context, '$e');
     }
