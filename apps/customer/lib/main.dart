@@ -18,6 +18,13 @@ void main() {
   app.init();
 }
 
+String tripDate(dynamic value) {
+  final date = DateTime.tryParse('$value')?.toLocal();
+  if (date == null) return '—';
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${two(date.day)}/${two(date.month)}/${date.year} ${two(date.hour)}:${two(date.minute)}';
+}
+
 class HaanCustomer extends StatelessWidget {
   const HaanCustomer({super.key});
   @override
@@ -321,7 +328,7 @@ class _RideHomeState extends State<RideHome> {
           }
         }
         if (previousId != null) await secure.delete(key: 'pin:$previousId');
-        if (trip != null && mounted)
+        if (trip != null && mounted) {
           setState(() {
             trip = null;
             rider = null;
@@ -330,6 +337,8 @@ class _RideHomeState extends State<RideHome> {
             photoRequestedFor = null;
             photoRetryAfter = null;
           });
+          if (drop != null && estimate == null) unawaited(_estimate());
+        }
         return;
       }
       final id = '${active['id']}';
@@ -762,7 +771,7 @@ class _RideHomeState extends State<RideHome> {
             style:Theme.of(context).textTheme.titleLarge),
           ...scheduled.where((s)=>s['status']=='scheduled').take(3).map((s)=>Card(
             child:ListTile(title:Text('${s['pickup_text']} → ${s['drop_text']}'),
-              subtitle:Text('${DateTime.tryParse('${s['scheduled_for']}')?.toLocal()} · ₹${s['estimate_rupees']}'),
+              subtitle:Text('${tripDate(s['scheduled_for'])} · ₹${s['estimate_rupees']}'),
               trailing:IconButton(icon:const Icon(Icons.cancel_outlined),tooltip:'Cancel scheduled ride',
                 onPressed:() async {try{await app.api.post('/v1/scheduled/${s['id']}/cancel',{});
                   await secure.delete(key:'pin:${s['id']}');await _loadScheduled();}
@@ -845,7 +854,11 @@ class _RideHomeState extends State<RideHome> {
                             children: [
                               Text('${trip?['rider_name'] ?? 'Rider'}',
                                 style: Theme.of(context).textTheme.titleLarge),
-                              Text('${trip?['rating_avg'] ?? 'New'} ★'),
+                              Text(() {
+                                final rating = num.tryParse('${trip?['rating_avg'] ?? ''}') ?? 0;
+                                return rating > 0 ? '${rating.toStringAsFixed(2)} ★'
+                                    : (app.language == 'hi' ? 'नया ड्राइवर' : 'New driver');
+                              }()),
                             ])),
                         ]),
                         const SizedBox(height: 12),
@@ -1222,7 +1235,7 @@ class _TripHistoryState extends State<TripHistory> {
                                     '${t['pickup_text']} → ${t['drop_text']}',
                                     maxLines: 2),
                                 subtitle: Text(
-                                    '${t['vehicle_type']} · ${t['status']} · ${t['created_at']}'),
+                                    '${t['vehicle_type']} · ${t['status']} · ${tripDate(t['created_at'])}'),
                                 trailing: Text(t['status']=='completed'
                                     ? '₹${t['customer_final_rupees'] ?? t['final_rupees'] ?? '—'}'
                                     : t['status']=='cancelled'||t['status']=='no_riders_found'
@@ -1277,7 +1290,7 @@ class _ReceiptPageState extends State<ReceiptPage> {
                                 style: Theme.of(context).textTheme.titleLarge),
                             const Divider(),
                             Text(
-                                '${trip!['vehicle_type']} · ${trip!['completed_at'] ?? trip!['created_at']}'),
+                                '${trip!['vehicle_type']} · ${tripDate(trip!['completed_at'] ?? trip!['created_at'])}'),
                             if(trip!['status']=='completed') Text(
                                 '₹${trip!['customer_final_rupees'] ?? trip!['final_rupees']}',
                                 style:Theme.of(context).textTheme.displaySmall),
