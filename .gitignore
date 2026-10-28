@@ -17,6 +17,9 @@ android/key.properties
 *.keystore
 web/downloads/
 /*.apk
+.qa/
+PLAYBOOK.txt
+PROGRESS.md
 .idea/
 *.iml
 

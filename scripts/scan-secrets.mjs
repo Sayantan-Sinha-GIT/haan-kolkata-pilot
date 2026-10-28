@@ -9,7 +9,7 @@ const worker=JSON.parse(readFileSync(new URL('../secrets/worker-secrets.json',im
 const firebase=JSON.parse(readFileSync(new URL('../secrets/firebase-service-account.json',import.meta.url),'utf8'));
 const secrets={...provider,...worker,FIREBASE_PRIVATE_KEY:firebase.private_key,FIREBASE_CLIENT_EMAIL:firebase.client_email};
 const files=execFileSync('git',['ls-files','-z','--cached','--others','--exclude-standard'],{cwd:root}).toString().split('\0').filter(Boolean);
-const apks=['.qa/release-1.0.2/customer/app-arm64-v8a-release.apk','.qa/release-1.0.2/rider/app-arm64-v8a-release.apk'];
+const apks=['Haan-Customer-arm64-v1.0.10.apk','Haan-Rider-arm64-v1.0.9.apk'];
 let hits=0;
 for(const relative of [...files,...apks]){
   let bytes;try{bytes=readFileSync(join(root,relative));}catch{continue;}
