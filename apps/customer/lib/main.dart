@@ -710,7 +710,7 @@ class _RideHomeState extends State<RideHome> {
           Text(chosen && estimate != null ? '₹${estimate!['rupees']}'
               : app.language == 'hi' ? '${seats.split(' ').first} सीट' : seats,
             style: theme.textTheme.bodySmall),
-        ]))));
+        ])))));
   }
 
   Widget _bookingPanel() =>
