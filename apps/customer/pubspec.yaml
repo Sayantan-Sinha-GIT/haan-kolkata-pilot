@@ -1,7 +1,7 @@
 name: haan_customer
 description: Haan customer Android app.
 publish_to: none
-version: 1.0.9+10
+version: 1.0.10+11
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:

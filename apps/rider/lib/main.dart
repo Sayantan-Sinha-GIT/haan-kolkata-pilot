@@ -365,7 +365,9 @@ class _RiderHomeState extends State<RiderHome> {
     final pin = await showDialog<String>(
         context: context,
         builder: (c) => AlertDialog(
-                title: Text(app.tr('pin')),
+                title: Text(app.language == 'hi'
+                    ? 'ग्राहक से बोर्डिंग PIN पूछें'
+                    : 'Ask customer for boarding PIN'),
                 content: TextField(
                     controller: ctl,
                     keyboardType: TextInputType.number,
