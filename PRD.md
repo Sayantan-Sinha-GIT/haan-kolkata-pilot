@@ -312,7 +312,7 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 9 | Languages and themes | Both languages and both themes on every screen; no untranslated text or unreadable contrast |
 | 10 | Failure handling | With network off or any quota hit, every screen shows a message, never a blank or crash |
 | 11 | Secrets | Zero keys in an APK, the website or the public repo |
-| 12 | Website | No login anywhere; both QR codes open the verified versioned APK download (Pages until owner supplies Drive links); Lighthouse performance target 90+ on mobile |
+| 12 | Website | No public login; both QR codes open the verified versioned APK download on the owner's Drive; Lighthouse performance target 90+ on mobile |
 | 13 | Visuals | Every page has a living background and real pictures; signature moment and all 5 scroll moments work |
 | 14 | Cost | No service asked for a card or credits |
 | 15 | Pickup navigation | Accepted/arrived rider sees a Google Maps directions URL to the trip's exact pickup coordinates; Bike requests two-wheeler mode |
