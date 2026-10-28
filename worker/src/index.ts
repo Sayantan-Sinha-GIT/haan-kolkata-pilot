@@ -490,7 +490,8 @@ api.get('/v1/rider/offers', async c => {
     t.service_mode,t.stops,t.guest_name,t.promo_discount_rupees,t.customer_estimate_rupees,
     t.pickup_lat,t.pickup_lng,rp.last_lat,rp.last_lng
     from trip_offers o join trips t on t.id=o.trip_id join rider_profiles rp on rp.user_id=o.rider_id
-    where o.rider_id=${user.id}::uuid and o.responded_at is null and o.expires_at>now() and t.status='searching' order by o.offered_at desc`;
+    where o.rider_id=${user.id}::uuid and o.responded_at is null and o.expires_at>now()
+      and t.status='searching' and o.match_round=t.match_round order by o.offered_at desc`;
   return c.json({offers:offers.map(o=>({id:o.id,trip_id:o.trip_id,expires_at:o.expires_at,pickup_text:o.pickup_text,
     drop_text:o.drop_text,estimated_km:o.estimated_km,estimate_rupees:o.estimate_rupees,
     service_mode:o.service_mode,stops:o.stops,guest_name:o.guest_name,

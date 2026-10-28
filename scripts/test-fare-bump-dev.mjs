@@ -136,6 +136,21 @@ try {
     'GET', undefined, rider), 200, x => x.trip.my_rating_stars === 4);
   check('duplicate rating denied', await call(`/v1/trips/${completed.trip.id}/rating`,
     'POST', {stars: 3}, rider), 409);
+  for (let i = 0; i < 10; i++) {
+    await call('/v1/rider/heartbeat', 'POST', {lat: pickup.lat, lng: pickup.lng}, rider);
+    const contested = await newRide();
+    const pending = await offerFor(contested.trip.id);
+    const [increase, accept] = await Promise.all([
+      call(`/v1/trips/${contested.trip.id}/increase-fare`, 'POST', {increment: 20}, customer),
+      call(`/v1/rider/offers/${pending.id}/accept`, 'POST', {}, rider),
+    ]);
+    if (!((increase.status === 200 && accept.status === 409)
+      || (increase.status === 409 && accept.status === 200)))
+      throw new Error(`Fare/accept race ${i + 1}: ${increase.status}/${accept.status}`);
+    checks++; console.log(`PASS fare/accept race ${i + 1}`);
+    check('race cleanup cancellation', await call(`/v1/trips/${contested.trip.id}/cancel`,
+      'POST', {reason: 'QA race complete'}, customer), 200);
+  }
   console.log(`Fare increase checks passed: ${checks}`);
 } finally {
   if (rider) await call('/v1/rider/online', 'POST', {online: false}, rider).catch(() => {});

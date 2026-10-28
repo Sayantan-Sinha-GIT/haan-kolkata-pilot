@@ -75,6 +75,7 @@ create table trip_offers (
   id uuid primary key default gen_random_uuid(), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   trip_id uuid not null references trips(id), rider_id uuid not null references users(id),
   offered_at timestamptz not null default now(), expires_at timestamptz not null default now()+interval '15 seconds',
+  match_round integer not null default 0,
   responded_at timestamptz, response text check(response in ('accepted','declined','timeout')),
   unique(trip_id,rider_id)
 );
@@ -142,6 +143,7 @@ begin
   update trips t set rider_id=p_rider,status='accepted',accepted_at=now()
   from trip_offers o where o.id=p_offer and o.trip_id=t.id and o.rider_id=p_rider
     and o.responded_at is null and o.expires_at>now() and t.status='searching'
+    and o.match_round=t.match_round
   returning t.id into v_trip;
   if v_trip is null then return null; end if;
   update trip_offers set response='accepted',responded_at=now() where id=p_offer;

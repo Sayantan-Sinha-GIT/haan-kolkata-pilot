@@ -48,8 +48,8 @@ export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
   });
   if (!candidate) return true;
   // Lock the trip while inserting so a fare restart cannot leave an old-round offer live.
-  const offers = await sql`insert into trip_offers(trip_id,rider_id)
-    select t.id,${candidate.user_id}::uuid from trips t
+  const offers = await sql`insert into trip_offers(trip_id,rider_id,match_round)
+    select t.id,${candidate.user_id}::uuid,t.match_round from trips t
     where t.id=${tripId}::uuid and t.status='searching'
       and t.match_round=${trip.match_round}::int
     for update of t
