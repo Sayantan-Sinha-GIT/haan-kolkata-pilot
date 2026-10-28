@@ -30,6 +30,11 @@ export function fare(config: Fare, km: number, minutes: number): number {
   if (!Number.isFinite(km) || !Number.isFinite(minutes) || km < 0 || minutes < 0) throw new Error('invalid_distance');
   return Math.round(Math.max(config.minimum, config.base + config.per_km * km + config.per_min * minutes));
 }
+export function finalFareWithBump(config: Fare, km: number, minutes: number, bump: number, estimate: number): number {
+  if (!Number.isInteger(bump) || bump < 0 || bump > 200 || !Number.isInteger(estimate) || estimate < 1)
+    throw new Error('invalid_fare_bump');
+  return Math.min(fare(config, km, minutes) + bump, Math.round(estimate * 1.5));
+}
 export function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const rad = Math.PI / 180;
   const dLat = (b.lat - a.lat) * rad;

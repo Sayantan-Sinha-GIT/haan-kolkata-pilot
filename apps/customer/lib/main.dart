@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -251,7 +252,8 @@ class RideHome extends StatefulWidget {
 class _RideHomeState extends State<RideHome> {
   LatLng center = kolkata, pickup = kolkata;
   LatLng? drop, rider;
-  String pickupLabel = 'Kolkata', dropLabel = '';
+  String pickupLabel = 'Finding your location…', dropLabel = '';
+  bool pickupReady = false, pickupManual = false, locatingPickup = false;
   final pickupNote = TextEditingController(), guestName=TextEditingController(),
       guestPhone=TextEditingController(), promoCode=TextEditingController();
   final List<Map<String,dynamic>> stops=[];
@@ -302,14 +304,31 @@ class _RideHomeState extends State<RideHome> {
     catch(_){/* Promotion entry remains usable. */}
   }
 
-  Future<void> _position() async {
-    final p = await currentPosition();
-    if (p != null && mounted)
-      setState(() {
+  Future<void> _position({bool force = false}) async {
+    if (locatingPickup) return;
+    setState(() => locatingPickup = true);
+    final current = await currentPosition();
+    Position? last;
+    if (current == null) {
+      try { last = await Geolocator.getLastKnownPosition(); } catch (_) { /* Manual pickup stays available. */ }
+    }
+    final p = current ?? (last != null &&
+        DateTime.now().difference(last.timestamp).abs() < const Duration(minutes: 5) ? last : null);
+    if (!mounted) return;
+    setState(() {
+      locatingPickup = false;
+      if (p == null) {
+        if (!pickupReady) pickupLabel = app.language == 'hi'
+            ? 'पिकअप चुनें या फिर स्थान आज़माएँ' : 'Choose pickup or retry location';
+      } else if (!pickupManual || force) {
         center = LatLng(p.latitude, p.longitude);
         pickup = center;
-        pickupLabel = 'Current location';
-      });
+        pickupReady = true;
+        pickupManual = false;
+        pickupLabel = app.language == 'hi' ? 'आपकी लोकेशन' : 'Your location';
+      }
+    });
+    if (p != null && drop != null && trip == null && (!pickupManual || force)) unawaited(_estimate());
   }
 
   Future<void> _loadActive({bool silent = false}) async {
@@ -352,6 +371,7 @@ class _RideHomeState extends State<RideHome> {
           trip = t;
           pin = localPin;
           pickup = LatLng((t['pickup_lat'] as num).toDouble(),(t['pickup_lng'] as num).toDouble());
+          pickupReady = true;
           drop = LatLng((t['drop_lat'] as num).toDouble(),(t['drop_lng'] as num).toDouble());
           pickupLabel = '${t['pickup_text']}';
           dropLabel = '${t['drop_text']}';
@@ -389,6 +409,8 @@ class _RideHomeState extends State<RideHome> {
             (selected['lng'] as num).toDouble());
         if (isPickup) {
           pickup = p;
+          pickupReady = true;
+          pickupManual = true;
           pickupLabel = '${selected['name']}';
         } else {
           drop = p;
@@ -397,7 +419,7 @@ class _RideHomeState extends State<RideHome> {
         estimate = null;
         routePoints = null;
       });
-      if (drop != null) _estimate();
+      if (drop != null && pickupReady) _estimate();
     }
   }
 
@@ -438,7 +460,7 @@ class _RideHomeState extends State<RideHome> {
   };
 
   Future<void> _estimate() async {
-    if (drop == null) return;
+    if (drop == null || !pickupReady) return;
     final revision=++estimateRevision;
     setState(() {
       busy = true;
@@ -462,7 +484,7 @@ class _RideHomeState extends State<RideHome> {
   }
 
   Future<void> _book() async {
-    if (drop == null || estimate == null) return;
+    if (drop == null || estimate == null || !pickupReady) return;
     setState(() {
       busy = true;
       error = null;
@@ -501,25 +523,44 @@ class _RideHomeState extends State<RideHome> {
 
   Future<void> _cancel() async {
     final reason = await showModalBottomSheet<String>(
-        context: context,
-        builder: (context) => SafeArea(
-            child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  'Changed plans',
-                  'Rider is delayed',
-                  'Wrong pickup',
-                  'Other'
-                ]
-                    .map((r) => ListTile(
-                        title: Text(r), onTap: () => Navigator.pop(context, r)))
-                    .toList())));
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        String? selected;
+        return StatefulBuilder(builder: (sheetContext, refresh) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 6, 22, 22),
+            child: Column(mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(app.language == 'hi' ? 'राइड क्यों रद्द कर रहे हैं?' : 'Why cancel this ride?',
+                style: Theme.of(sheetContext).textTheme.headlineSmall),
+              const SizedBox(height: 6),
+              Text(app.language == 'hi' ? 'कारण चुनें, फिर रद्द करने की पुष्टि करें।'
+                  : 'Choose a reason, then confirm cancellation.'),
+              const SizedBox(height: 12),
+              for (final item in ['Changed plans', 'Rider is delayed', 'Wrong pickup', 'Other'])
+                ListTile(
+                  leading: Icon(selected == item ? Icons.check_circle : Icons.circle_outlined,
+                    color: selected == item ? amber : null),
+                  title: Text(item),
+                  onTap: () => refresh(() => selected = item)),
+              const SizedBox(height: 12),
+              HaanButton(app.language == 'hi' ? 'राइड रद्द करने की पुष्टि करें' : 'Confirm cancellation',
+                onPressed: selected == null ? null : () => Navigator.pop(sheetContext, selected)),
+              Center(child: TextButton(onPressed: () => Navigator.pop(sheetContext),
+                child: Text(app.language == 'hi' ? 'राइड जारी रखें' : 'Keep ride'))),
+            ]))));
+      });
     if (reason == null || trip == null) return;
+    setState(() => busy = true);
     try {
       await app.api.post('/v1/trips/${trip!['id']}/cancel', {'reason': reason});
       await _loadActive();
     } catch (e) {
       if (mounted) showMessage(context, '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
     }
   }
 
@@ -574,10 +615,11 @@ class _RideHomeState extends State<RideHome> {
       Positioned.fill(
           child: HaanMap(
               center: center,
-              pickup: pickup,
+              pickup: pickupReady ? pickup : null,
               drop: approaching ? null : drop,
               rider: rider,
               routePoints: activeRoute,
+              fitRoute: drop != null && !approaching,
               onTap: trip == null
                   ? (p) => setState(() {
                         drop = p;
@@ -597,13 +639,16 @@ class _RideHomeState extends State<RideHome> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 18, vertical: 10),
                         child: Row(children: [
-                          const Icon(Icons.location_on, color: amber),
+                          Icon(trip == null ? Icons.location_on :
+                            status == 'searching' ? Icons.radar_rounded : Icons.route_rounded,
+                            color: amber),
                           const SizedBox(width: 8),
-                          Text('HAAN',
-                              style:
-                                  Theme.of(context).appBarTheme.titleTextStyle)
+                          Text(trip == null ? 'HAAN' : status == 'searching'
+                              ? (app.language == 'hi' ? 'राइडर खोज रहे हैं' : 'SEARCHING')
+                              : (app.language == 'hi' ? 'आपकी राइड' : 'YOUR RIDE'),
+                              style: Theme.of(context).appBarTheme.titleTextStyle)
                         ])))),
-            IconButton.filledTonal(
+            if (trip == null) IconButton.filledTonal(
                 onPressed: () => _assistant(),
                 icon: const Icon(Icons.mic_rounded),
                 tooltip: app.tr('assistant'))
@@ -611,85 +656,110 @@ class _RideHomeState extends State<RideHome> {
       Align(
           alignment: Alignment.bottomCenter,
           child: Container(
-              constraints: const BoxConstraints(maxHeight: 500),
+              height: MediaQuery.sizeOf(context).height *
+                  (trip == null && drop == null ? .37 : .60),
               decoration: BoxDecoration(
                   color: Theme.of(context).scaffoldBackgroundColor,
                   borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(28)),
+                      const BorderRadius.vertical(top: Radius.circular(32)),
                   boxShadow: const [
-                    BoxShadow(blurRadius: 24, color: Colors.black26)
+                    BoxShadow(offset: Offset(0, -8), blurRadius: 30, color: Colors.black26)
                   ]),
-              child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(22, 12, 22, 24),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              child: Column(children: [
+                const SizedBox(height: 11),
+                Container(width: 42, height: 5, decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .3),
+                  borderRadius: BorderRadius.circular(4))),
+                Expanded(child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(22, 17, 22, 18),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Center(
-                            child: Container(
-                                width: 40,
-                                height: 4,
-                                decoration: BoxDecoration(
-                                    color: Colors.grey,
-                                    borderRadius: BorderRadius.circular(4)))),
-                        const SizedBox(height: 18),
-                        if (trip == null) ...[
-                          _bookingPanel()
-                        ] else ...[
-                          _tripPanel(status)
-                        ],
-                        if (error != null)
-                          Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: HaanError(error!,
-                                  retry: () => trip == null
-                                      ? _estimate()
-                                      : _loadActive()))
-                      ]))))
+                        if (trip == null) _bookingPanel() else _tripPanel(status),
+                        if (error != null) Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: HaanError(error!, retry: () => trip == null
+                              ? _estimate() : _loadActive()))
+                      ]))),
+                if (trip == null && drop != null) SafeArea(top: false,
+                  child: Padding(padding: const EdgeInsets.fromLTRB(22, 8, 22, 12),
+                    child: HaanButton(busy ? '…' : scheduledFor == null
+                        ? '${app.tr('book')} · ₹${estimate?['rupees'] ?? '—'}'
+                        : (app.language == 'hi' ? 'यात्रा तय करें' : 'Schedule ride'),
+                      onPressed: busy || estimate == null || !pickupReady ? null : _book)))
+              ])))
     ]);
+  }
+
+  Widget _vehicleOption(String kind, IconData icon, String seats) {
+    final chosen = vehicle == kind;
+    final theme = Theme.of(context);
+    return Expanded(child: Material(
+      color: chosen ? amber.withValues(alpha: .20) : theme.cardColor,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: chosen ? amber : theme.dividerColor, width: chosen ? 2 : 1)),
+      child: InkWell(borderRadius: BorderRadius.circular(18), onTap: () {
+        if (chosen) return;
+        setState(() { vehicle = kind; if (kind != 'Cab') rideMode = 'standard'; });
+        _estimate();
+      }, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, size: 30, color: chosen ? theme.colorScheme.onSurface : amber),
+          const SizedBox(height: 9),
+          Text(app.tr(kind.toLowerCase()), style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700)),
+          Text(chosen && estimate != null ? '₹${estimate!['rupees']}'
+              : app.language == 'hi' ? '${seats.split(' ').first} सीट' : seats,
+            style: theme.textTheme.bodySmall),
+        ]))));
   }
 
   Widget _bookingPanel() =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        HaanHeading(app.tr('whereTo')),
-        const SizedBox(height: 17),
-        ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.trip_origin, color: amber),
-            title: Text(app.tr('pickup')),
-            subtitle:
-                Text(pickupLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+        HaanHeading(drop == null ? app.tr('whereTo')
+            : (app.language == 'hi' ? 'अपनी राइड चुनें' : 'Choose your ride')),
+        const SizedBox(height: 7),
+        Text(drop == null
+            ? (app.language == 'hi' ? 'मंज़िल चुनें। पिकअप आपकी लोकेशन से होगा।'
+                : 'Choose a destination. Pickup starts at your location.')
+            : (app.language == 'hi' ? 'पिकअप और मंज़िल जाँचें, फिर राइड बुक करें।'
+                : 'Check your route, then book in one tap.'),
+          style: Theme.of(context).textTheme.bodyMedium),
+        const SizedBox(height: 16),
+        Card(child: Column(children: [
+          ListTile(
+            leading: locatingPickup ? const SizedBox(width: 24, height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.my_location_rounded, color: amber),
+            title: Text(app.tr('pickup'), style: Theme.of(context).textTheme.labelMedium),
+            subtitle: Text(pickupLabel, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium),
+            trailing: IconButton(icon: const Icon(Icons.gps_fixed_rounded),
+              tooltip: app.language == 'hi' ? 'मेरी लोकेशन फिर आज़माएँ' : 'Use my location',
+              onPressed: locatingPickup ? null : () => _position(force: true)),
             onTap: () => choosePlace(true)),
-        ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.location_on, color: Color(0xfffa805d)),
-            title: Text(app.tr('destination')),
-            subtitle: Text(dropLabel.isEmpty ? app.tr('search') : dropLabel,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+          const Divider(height: 1, indent: 54, endIndent: 18),
+          ListTile(
+            leading: const Icon(Icons.location_on_rounded, color: Color(0xfffa805d)),
+            title: Text(app.tr('destination'), style: Theme.of(context).textTheme.labelMedium),
+            subtitle: Text(dropLabel.isEmpty
+                ? (app.language == 'hi' ? 'कहाँ जाना है?' : 'Search for a place')
+                : dropLabel, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium),
+            trailing: const Icon(Icons.chevron_right_rounded),
             onTap: () => choosePlace(false)),
+        ])),
         if (drop != null) ...[
-          const SizedBox(height: 8),
-          SegmentedButton<String>(
-              segments: [
-                ButtonSegment(
-                    value: 'Bike',
-                    label: Text(app.tr('bike')),
-                    icon: const Icon(Icons.two_wheeler)),
-                ButtonSegment(
-                    value: 'Auto',
-                    label: Text(app.tr('auto')),
-                    icon: const Icon(Icons.electric_rickshaw)),
-                ButtonSegment(
-                    value: 'Cab',
-                    label: Text(app.tr('cab')),
-                    icon: const Icon(Icons.local_taxi))
-              ],
-              selected: {
-                vehicle
-              },
-              onSelectionChanged: (v) {
-                setState(() {vehicle = v.first;if(vehicle!='Cab')rideMode='standard';});
-                _estimate();
-              }),
+          const SizedBox(height: 20),
+          Text(app.language == 'hi' ? 'सवारी चुनें' : 'Ride options',
+            style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 10),
+          Row(children: [
+            _vehicleOption('Bike', Icons.two_wheeler_rounded, '1 seat'),
+            const SizedBox(width: 8),
+            _vehicleOption('Auto', Icons.electric_rickshaw_rounded, '3 seats'),
+            const SizedBox(width: 8),
+            _vehicleOption('Cab', Icons.local_taxi_rounded, '4 seats'),
+          ]),
           const SizedBox(height: 14),
           Text(app.language=='hi'?'यात्रा का प्रकार':'Ride type',style:Theme.of(context).textTheme.titleMedium),
           Wrap(spacing:8,children:[
@@ -726,22 +796,28 @@ class _RideHomeState extends State<RideHome> {
               decoration:InputDecoration(labelText:app.language=='hi'?'यात्री का मोबाइल':'Passenger mobile')),
             Text(app.language=='hi'?'बुक करने वाला यात्री को PIN भेजे।':'Share the boarding PIN with your passenger privately.'),
           ],
+          if (busy && estimate == null) const Padding(
+            padding: EdgeInsets.symmetric(vertical: 15), child: LinearProgressIndicator()),
           if (estimate != null)
-            Card(
-                child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                              '${estimate!['km']} km · ${estimate!['minutes']} min'),
-                          Column(crossAxisAlignment:CrossAxisAlignment.end,children:[
-                            Text('₹${estimate!['rupees']}',
-                              style: Theme.of(context).textTheme.headlineMedium),
-                            if((estimate!['promo_discount_rupees'] as num?)?.toInt()!=0)
-                              Text('₹${estimate!['promo_discount_rupees']} ${app.language=='hi'?'छूट':'off'}'),
-                          ])
-                        ]))),
+            Card(child: Padding(padding: const EdgeInsets.all(18),
+              child: Row(children: [
+                Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(
+                  color: amber.withValues(alpha: .18), borderRadius: BorderRadius.circular(13)),
+                  child: const Icon(Icons.route_rounded, color: amber)),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(app.language == 'hi' ? 'इस राइड का किराया' : 'Your fare',
+                    style: Theme.of(context).textTheme.labelLarge),
+                  Text('${estimate!['km']} km · ${estimate!['minutes']} min',
+                    style: Theme.of(context).textTheme.bodySmall),
+                ])),
+                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Text('₹${estimate!['rupees']}', style: Theme.of(context).textTheme.headlineMedium
+                    ?.copyWith(fontWeight: FontWeight.w800)),
+                  if ((estimate!['promo_discount_rupees'] as num?)?.toInt() != 0)
+                    Text('₹${estimate!['promo_discount_rupees']} ${app.language == 'hi' ? 'छूट' : 'off'}'),
+                ]),
+              ]))),
           TextField(controller:promoCode,textCapitalization:TextCapitalization.characters,
             enabled:scheduledFor==null,
             onChanged:(_)=>setState(()=>estimate=null),
@@ -760,10 +836,6 @@ class _RideHomeState extends State<RideHome> {
               hintText: app.tr('pickupNoteHint'),
               prefixIcon: const Icon(Icons.notes))),
           const SizedBox(height: 10),
-          HaanButton(busy ? '…' : scheduledFor==null?app.tr('book'):
-            (app.language=='hi'?'यात्रा तय करें':'Schedule ride'),
-              onPressed:
-                  busy || estimate == null ? null : () => _confirmBooking())
         ],
         if(scheduled.any((s)=>s['status']=='scheduled'))...[
           const SizedBox(height:18),
@@ -783,31 +855,96 @@ class _RideHomeState extends State<RideHome> {
             icon: const Icon(Icons.mic),
             label: Text(app.tr('assistant')))
       ]);
-  Future<void> _confirmBooking() async {
-    final yes = await showDialog<bool>(
-        context: context,
-        builder: (c) => AlertDialog(
-                title: Text(app.tr('readBack')),
-                content: Text(
-                    '$pickupLabel → $dropLabel\n$vehicle · ₹${estimate?['rupees']}'
-                    '${rideMode=='standard'?'':'\n${rideMode=='intercity'?'Intercity (one way)':'Shared preview (no co-rider match)'}'}'
-                    '${stops.isEmpty?'':'\nStops: ${stops.map((s)=>s['text']).join(' → ')}'}'
-                    '${guestRide?'\nPassenger: ${guestName.text.trim()} · ${guestPhone.text.trim()}':''}'
-                    '${scheduledFor==null?'':'\nScheduled: ${scheduledFor!.toLocal()} · matching starts 10 minutes early; a driver is not guaranteed'}'
-                    '${promoCode.text.trim().isEmpty?'':'\nPromotion: ${promoCode.text.trim().toUpperCase()}'}'
-                    '${pickupNote.text.trim().isEmpty ? '' : '\n${app.tr('pickupNote')}: ${pickupNote.text.trim()}'}'),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(c, false),
-                      child: Text(app.tr('no'))),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(c, true),
-                      child: Text(app.tr('confirm')))
-                ]));
-    if (yes == true) _book();
+  String _compactPlace(Object? value) => '${value ?? ''}'
+      .split(',').take(2).join(',').trim();
+
+  Future<void> _increaseFare(int increment) async {
+    if (trip?['status'] != 'searching' || busy) return;
+    setState(() => busy = true);
+    try {
+      await app.api.post('/v1/trips/${trip!['id']}/increase-fare',
+        {'increment': increment});
+      await _loadActive();
+      if (mounted) showMessage(context, app.language == 'hi'
+          ? 'नए किराये पर राइडर फिर खोज रहे हैं।'
+          : 'Searching again at your updated fare.');
+    } catch (e) {
+      if (mounted) showMessage(context, '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 
-  Widget _tripPanel(String status) =>
+  Widget _searchingPanel() {
+    final theme = Theme.of(context);
+    final deadline = DateTime.tryParse('${trip?['search_deadline'] ?? ''}');
+    final remaining = deadline == null ? 90 : deadline.difference(DateTime.now()).inSeconds.clamp(0, 90);
+    final bump = (trip?['customer_fare_bump_rupees'] as num?)?.toInt() ?? 0;
+    final rounds = (trip?['fare_bump_count'] as num?)?.toInt() ?? 0;
+    final fare = trip?['customer_estimate_rupees'] ?? trip?['estimate_rupees'] ?? '—';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Container(width: 48, height: 48, decoration: BoxDecoration(
+          color: amber.withValues(alpha: .18), borderRadius: BorderRadius.circular(16)),
+          child: const Icon(Icons.radar_rounded, color: amber, size: 29)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(app.language == 'hi' ? 'राइडर खोज रहे हैं' : 'Finding your rider',
+            style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+          Text(app.language == 'hi' ? 'आसपास के ड्राइवरों से पूछ रहे हैं'
+              : 'Checking with nearby drivers', style: theme.textTheme.bodyMedium),
+        ])),
+      ]),
+      const SizedBox(height: 16),
+      ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(
+        value: (90 - remaining) / 90, minHeight: 7,
+        backgroundColor: theme.colorScheme.onSurface.withValues(alpha: .12),
+        valueColor: const AlwaysStoppedAnimation<Color>(amber))),
+      const SizedBox(height: 8),
+      Text(app.language == 'hi' ? 'लगभग $remaining सेकंड बाकी' : 'Up to $remaining seconds left',
+        style: theme.textTheme.bodySmall),
+      const SizedBox(height: 17),
+      Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(children: [
+        Row(children: [const Icon(Icons.trip_origin, color: amber, size: 21),
+          const SizedBox(width: 12), Expanded(child: Text(_compactPlace(trip?['pickup_text']),
+            maxLines: 1, overflow: TextOverflow.ellipsis))]),
+        const Padding(padding: EdgeInsets.only(left: 9), child: Divider(height: 19)),
+        Row(children: [const Icon(Icons.location_on, color: Color(0xfffa805d), size: 21),
+          const SizedBox(width: 12), Expanded(child: Text(_compactPlace(trip?['drop_text']),
+            maxLines: 1, overflow: TextOverflow.ellipsis))]),
+        const Divider(height: 22),
+        Row(children: [
+          Text('${trip?['vehicle_type'] ?? vehicle}', style: theme.textTheme.titleMedium),
+          const Spacer(),
+          Text('₹$fare', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+        ]),
+        if (bump > 0) Align(alignment: Alignment.centerRight,
+          child: Text(app.language == 'hi' ? '₹$bump अतिरिक्त शामिल' : 'Includes ₹$bump added fare',
+            style: theme.textTheme.bodySmall)),
+      ]))),
+      const SizedBox(height: 16),
+      if (rounds < 3 && bump < 200) ...[
+        Text(app.language == 'hi' ? 'किराया बढ़ाकर फिर खोजें'
+            : 'Increase fare, restart search',
+          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        Text(app.language == 'hi' ? 'चुनते ही नए किराये पर खोज फिर शुरू होगी।'
+            : 'A new 90-second search starts at the updated fare.',
+          style: theme.textTheme.bodySmall),
+        const SizedBox(height: 10),
+        Wrap(spacing: 8, runSpacing: 8, children: [10,20,30,40]
+          .where((amount) => bump + amount <= 200).map((amount) =>
+            ActionChip(label: Text('+₹$amount'), avatar: const Icon(Icons.add, size: 18),
+              onPressed: busy ? null : () => _increaseFare(amount))).toList()),
+      ],
+      const SizedBox(height: 15),
+      OutlinedButton.icon(onPressed: busy ? null : _cancel,
+        icon: const Icon(Icons.close),
+        label: Text(app.language == 'hi' ? 'खोज रद्द करें' : 'Cancel search')),
+    ]);
+  }
+
+  Widget _tripPanel(String status) => status == 'searching' ? _searchingPanel() :
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         HaanHeading(app.tr(switch (status) {
           'searching' => 'finding',
@@ -818,8 +955,8 @@ class _RideHomeState extends State<RideHome> {
           _ => 'status'
         })),
         const SizedBox(height: 14),
-        Text(
-            '${trip?['pickup_text'] ?? pickupLabel} → ${trip?['drop_text'] ?? dropLabel}'),
+        Text('${_compactPlace(trip?['pickup_text'] ?? pickupLabel)} → '
+            '${_compactPlace(trip?['drop_text'] ?? dropLabel)}'),
         if((trip?['stops'] as List?)?.isNotEmpty??false)
           Text('${app.language=='hi'?'स्टॉप':'Stops'}: ${(trip!['stops'] as List).map((s)=>s['text']).join(' → ')}'),
         if('${trip?['guest_name']??''}'.isNotEmpty)
@@ -829,7 +966,6 @@ class _RideHomeState extends State<RideHome> {
         if(trip?['service_mode']=='intercity')
           Text(app.language=='hi'?'एक तरफ़ की इंटरसिटी यात्रा':'One-way intercity ride'),
         const SizedBox(height: 12),
-        if (status == 'searching') const LinearProgressIndicator(),
         if (status == 'arrived')
           Text(() {
             final at=DateTime.tryParse('${trip?['arrived_at']??''}');
@@ -1259,12 +1395,17 @@ class ReceiptPage extends StatefulWidget {
 class _ReceiptPageState extends State<ReceiptPage> {
   Map<String, dynamic>? trip;
   int stars = 0;
+  bool ratingSubmitted = false, ratingSkipped = false;
   String? error;
   @override
   void initState() {
     super.initState();
     app.api.get('/v1/trips/${widget.id}').then((d) {
-      if (mounted) setState(() => trip = Map<String, dynamic>.from(d['trip']));
+      if (mounted) setState(() {
+        trip = Map<String, dynamic>.from(d['trip']);
+        stars = (trip?['my_rating_stars'] as num?)?.toInt() ?? 0;
+        ratingSubmitted = stars > 0;
+      });
     }).catchError((e) {
       if (mounted) setState(() => error = '$e');
     });
@@ -1339,8 +1480,13 @@ class _ReceiptPageState extends State<ReceiptPage> {
                   ])));
               }),
               const SizedBox(height: 20),
-              if(trip!['status']=='completed') Text(app.tr('rate')),
-              if(trip!['status']=='completed') Row(
+              if(trip!['status']=='completed' && ratingSubmitted)
+                Text(app.language == 'hi' ? 'आपने इस ड्राइवर को $stars स्टार दिए।'
+                    : 'You rated this driver $stars stars.'),
+              if(trip!['status']=='completed' && !ratingSubmitted && !ratingSkipped)
+                Text(app.language == 'hi' ? 'ड्राइवर को रेट करें' : 'Rate your driver',
+                  style: Theme.of(context).textTheme.titleLarge),
+              if(trip!['status']=='completed' && !ratingSubmitted && !ratingSkipped) Row(
                   children: List.generate(
                       5,
                       (i) => IconButton(
@@ -1350,14 +1496,19 @@ class _ReceiptPageState extends State<ReceiptPage> {
                               await app.api.post(
                                   '/v1/trips/${widget.id}/rating',
                                   {'stars': stars});
-                              if (context.mounted)
+                              if (context.mounted) {
+                                setState(() => ratingSubmitted = true);
                                 showMessage(context, app.tr('done'));
+                              }
                             } catch (e) {
                               if (context.mounted) showMessage(context, '$e');
                             }
                           },
                           icon: Icon(i < stars ? Icons.star : Icons.star_border,
                               color: amber, size: 34)))),
+              if(trip!['status']=='completed' && !ratingSubmitted && !ratingSkipped)
+                TextButton(onPressed: () => setState(() => ratingSkipped = true),
+                  child: Text(app.language == 'hi' ? 'अभी छोड़ें' : 'Skip for now')),
               TextButton(
                   onPressed: () => Navigator.push(
                       context,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fare, haversineKm, normalizeVehicleNumber, scrubAssistantText, validCoordinates, validFutureDate, validImageBytes, validPoint, validUpiId } from './rules';
+import { fare, finalFareWithBump, haversineKm, normalizeVehicleNumber, scrubAssistantText, validCoordinates, validFutureDate, validImageBytes, validPoint, validUpiId } from './rules';
 import { decryptTotp, encryptTotp, hmac, totp, totpSetupKey } from './crypto';
 
 describe('non-negotiable trip rules',()=>{
@@ -7,6 +7,12 @@ describe('non-negotiable trip rules',()=>{
     const bike={base:20,per_km:6,per_min:.5,minimum:30};
     expect(fare(bike,1,2)).toBe(30);
     expect(fare(bike,4.2,12)).toBe(51);
+  });
+  it('includes a customer offer increase in the final fare and keeps the fare cap',()=>{
+    const bike={base:20,per_km:6,per_min:.5,minimum:30};
+    expect(finalFareWithBump(bike,4.2,12,20,71)).toBe(71);
+    expect(finalFareWithBump(bike,20,60,20,71)).toBe(107);
+    expect(()=>finalFareWithBump(bike,4.2,12,-10,71)).toThrow('invalid_fare_bump');
   });
   it('rejects invalid and too-close points before a booking',()=>{
     expect(validPoint({lat:22.57,lng:88.36,text:'Howrah'})).toBe(true);

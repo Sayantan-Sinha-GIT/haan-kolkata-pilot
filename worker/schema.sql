@@ -61,6 +61,10 @@ create table trips (
   accepted_at timestamptz, arrived_at timestamptz, started_at timestamptz, completed_at timestamptz,
   cancelled_by uuid references users(id), cancel_reason text, via_assistant boolean not null default false,
   offer_count smallint not null default 0, search_deadline timestamptz not null default now()+interval '90 seconds',
+  match_started_at timestamptz not null default now(), match_round integer not null default 0,
+  customer_fare_bump_rupees integer not null default 0
+    check(customer_fare_bump_rupees between 0 and 200), fare_bump_count smallint not null default 0
+    check(fare_bump_count between 0 and 3),
   admin_fare_override_note text
 );
 create unique index customer_one_active_trip on trips(customer_id) where status in ('searching','accepted','arrived','in_progress');

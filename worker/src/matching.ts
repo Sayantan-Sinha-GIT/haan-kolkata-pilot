@@ -5,7 +5,7 @@ import type { Env } from './types';
 
 export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
   const sql = db(env);
-  const [trip] = await sql`select id,status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng,created_at,search_deadline,offer_count
+  const [trip] = await sql`select id,status,vehicle_type,pickup_lat,pickup_lng,drop_lat,drop_lng,match_started_at,match_round,search_deadline,offer_count
     from trips where id=${tripId}::uuid`;
   if (!trip || trip.status !== 'searching') return false;
   const expired = await sql`update trip_offers set response='timeout',responded_at=now()
@@ -21,7 +21,7 @@ export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
     await broadcast(env, tripId, { status: 'no_riders_found' });
     return false;
   }
-  const elapsed = Date.now() - new Date(trip.created_at).getTime();
+  const elapsed = Date.now() - new Date(trip.match_started_at).getTime();
   const radius = elapsed >= 20_000 ? 5 : 2;
   const candidates = await sql`select rp.user_id,rp.last_lat,rp.last_lng,rp.destination_filter_lat,rp.destination_filter_lng,
     6371*2*asin(sqrt(least(1,power(sin(radians(rp.last_lat-${Number(trip.pickup_lat)})/2),2)
@@ -47,10 +47,16 @@ export async function advanceMatch(env: Env, tripId: string): Promise<boolean> {
     return after<=before-Math.min(0.5,before*0.02);
   });
   if (!candidate) return true;
-  const offers = await sql`insert into trip_offers(trip_id,rider_id) values(${tripId}::uuid,${candidate.user_id}::uuid)
+  // Lock the trip while inserting so a fare restart cannot leave an old-round offer live.
+  const offers = await sql`insert into trip_offers(trip_id,rider_id)
+    select t.id,${candidate.user_id}::uuid from trips t
+    where t.id=${tripId}::uuid and t.status='searching'
+      and t.match_round=${trip.match_round}::int
+    for update of t
     on conflict do nothing returning id`;
   if (!offers.length) return true;
-  await sql`update trips set offer_count=offer_count+1 where id=${tripId}::uuid and status='searching'`;
+  await sql`update trips set offer_count=offer_count+1 where id=${tripId}::uuid and status='searching'
+    and match_round=${trip.match_round}::int`;
   await broadcast(env, tripId, { status: 'searching', rider_offer: candidate.user_id });
   return true;
 }

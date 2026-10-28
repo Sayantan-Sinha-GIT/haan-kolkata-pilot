@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { db, consumeLimit } from './db';
 import { hmac, randomDigits, randomToken, signAccess, verifyAccess, verifyPassword, decryptTotp, verifyTotp, passwordHash, newTotpSecret, encryptTotp, totpSetupKey } from './crypto';
-import { fare, haversineKm, normalizeVehicleNumber, validCoordinates, validFutureDate, validImageBytes, validPoint, validUpiId, scrubAssistantText, type Vehicle } from './rules';
+import { fare, finalFareWithBump, haversineKm, normalizeVehicleNumber, validCoordinates, validFutureDate, validImageBytes, validPoint, validUpiId, scrubAssistantText, type Vehicle } from './rules';
 import { advanceMatch } from './matching';
 import { assistantIntent, broadcast, routeEstimate, searchPlaces, sendEmail, transcribe, TripRoom } from './services';
 import { sendPush } from './push';
@@ -330,7 +330,9 @@ api.get('/v1/trips/history', async c => {
   const rows=user.role==='customer'
     ? await db(c.env)`select t.id,t.status,t.vehicle_type,t.pickup_text,t.drop_text,t.estimate_rupees,
         t.final_rupees,t.customer_final_rupees,t.created_at,t.completed_at
-        from trips t where t.customer_id=${user.id}::uuid order by t.created_at desc limit 50`
+        from trips t where t.customer_id=${user.id}::uuid
+          and t.status<>'no_riders_found' and (t.status<>'cancelled' or t.rider_id is not null)
+        order by t.created_at desc limit 50`
     : await db(c.env)`select t.id,t.status,t.vehicle_type,t.pickup_text,t.drop_text,t.estimate_rupees,
         t.final_rupees,s.rider_earnings_rupees,t.created_at,t.completed_at
         from trips t left join trip_settlements s on s.trip_id=t.id
@@ -342,6 +344,7 @@ api.get('/v1/trips/:id', async c => {
   const id=c.req.param('id');if(!uuidOk(id))return error('Trip not found.','not_found',404);
   const [trip]=await db(c.env)`select t.id,t.customer_id,t.rider_id,t.status,t.vehicle_type,t.pickup_lat,t.pickup_lng,t.pickup_text,t.pickup_note,t.drop_lat,t.drop_lng,t.drop_text,
     t.estimated_km,t.estimated_min,t.estimate_rupees,t.final_rupees,t.customer_estimate_rupees,t.customer_final_rupees,
+    t.customer_fare_bump_rupees,t.fare_bump_count,t.search_deadline,t.match_started_at,t.match_round,t.offer_count,
     t.promo_discount_rupees,t.service_mode,t.stops,t.next_stop_index,t.guest_name,
     ts.platform_fee_rupees,ts.rider_earnings_rupees,ts.promotion_topup_rupees,
     ts.net_due_to_platform_rupees,ts.status as settlement_status,
@@ -350,11 +353,14 @@ api.get('/v1/trips/:id', async c => {
     ru.name as rider_name,case when t.status in ('accepted','arrived','in_progress') then ru.phone end as rider_phone,
     cu.name as customer_name,case when t.status in ('accepted','arrived','in_progress') then coalesce(t.guest_phone,cu.phone) end as customer_phone,
     rp.vehicle_number,rp.vehicle_make,rp.vehicle_model,rp.vehicle_color,rp.vehicle_year,rp.rating_avg,
+    my_rating.stars as my_rating_stars,
     case when t.status='completed' and rp.upi_id <> '' then rp.upi_id end as rider_upi_id
     from trips t left join users ru on ru.id=t.rider_id left join users cu on cu.id=t.customer_id
     left join trip_settlements ts on ts.trip_id=t.id
     left join promotions p on p.id=t.promotion_id
-    left join rider_profiles rp on rp.user_id=t.rider_id where t.id=${id}::uuid`;
+    left join rider_profiles rp on rp.user_id=t.rider_id
+    left join ratings my_rating on my_rating.trip_id=t.id and my_rating.from_user=${user.id}::uuid
+    where t.id=${id}::uuid`;
   if(!trip || (user.role==='customer'&&trip.customer_id!==user.id) || (user.role==='rider'&&trip.rider_id!==user.id))return error('Trip not found.','not_found',404);
   const [location]=await db(c.env)`select lat,lng,heading,recorded_at from trip_locations where trip_id=${id}::uuid order by recorded_at desc limit 1`;
   return c.json({ trip, location:location||null });
@@ -423,6 +429,34 @@ api.get('/v1/trips/:id/live', async c => {
   if(!trip || (!['super_admin','support_agent'].includes(user.role)&&![trip.customer_id,trip.rider_id].includes(user.id)))return error('Trip not found.','not_found',404);
   if(c.req.header('Upgrade')!=='websocket')return error('WebSocket required.','websocket_required',426);
   return c.env.TRIP_ROOM.get(c.env.TRIP_ROOM.idFromName(id)).fetch(c.req.raw);
+});
+api.post('/v1/trips/:id/increase-fare', async c => {
+  const user=await requireRole(c.env,c.req.raw,['customer']);if(isResponse(user))return user;
+  const id=c.req.param('id'),input=await body<{increment?:number}>(c.req.raw);
+  if(!uuidOk(id)||![10,20,30,40].includes(input.increment??0))
+    return error('Choose a ₹10, ₹20, ₹30 or ₹40 increase.','invalid_fare_increase');
+  const increment=input.increment!;
+  const [trip]=await db(c.env)`with updated as (
+    update trips set estimate_rupees=estimate_rupees+${increment},
+      customer_estimate_rupees=customer_estimate_rupees+${increment},
+      customer_fare_bump_rupees=customer_fare_bump_rupees+${increment},
+      fare_bump_count=fare_bump_count+1,match_round=match_round+1,offer_count=0,
+      match_started_at=now(),search_deadline=now()+interval '90 seconds'
+    where id=${id}::uuid and customer_id=${user.id}::uuid and status='searching'
+      and search_deadline>now() and fare_bump_count<3
+      and customer_fare_bump_rupees+${increment}<=200
+    returning id,estimate_rupees,customer_estimate_rupees,customer_fare_bump_rupees,
+      fare_bump_count,search_deadline
+  ), cleared as (
+    delete from trip_offers where trip_id in (select id from updated) returning id
+  ) select * from updated`;
+  if(!trip)return error('This search can no longer be increased. Start a new request if it ended.','fare_increase_unavailable',409);
+  await advanceMatch(c.env,id);
+  const room=c.env.TRIP_ROOM.get(c.env.TRIP_ROOM.idFromName(id));
+  await room.fetch('https://room.internal/schedule',{method:'POST',body:JSON.stringify({tripId:id})});
+  await broadcast(c.env,id,{status:'searching',estimate_rupees:trip.estimate_rupees,
+    customer_estimate_rupees:trip.customer_estimate_rupees,search_restarted:true});
+  return c.json({trip});
 });
 api.post('/v1/trips/:id/cancel', async c => {
   const user=await requireRole(c.env,c.req.raw,['customer','rider']);if(isResponse(user))return user;
@@ -517,14 +551,15 @@ api.post('/v1/trips/:id/complete',async c=>{
   const id=c.req.param('id'),input=await body<{final_km?:number}>(c.req.raw);
   if(!uuidOk(id))return error('Trip not found.','not_found',404);
   const sql=db(c.env);
-  const [trip]=await sql`select t.estimated_km,t.estimate_rupees,t.started_at,t.vehicle_type,t.promo_discount_rupees,
+  const [trip]=await sql`select t.estimated_km,t.estimate_rupees,t.started_at,t.vehicle_type,t.promo_discount_rupees,t.customer_fare_bump_rupees,
     t.next_stop_index,jsonb_array_length(t.stops) as stop_count,f.base,f.per_km,f.per_min,f.minimum
     from trips t join fare_config f on f.vehicle_type=t.vehicle_type where t.id=${id}::uuid and t.rider_id=${user.id}::uuid and t.status='in_progress'`;
   if(!trip)return error('Trip is not in progress.','invalid_state',409);
   if(Number(trip.next_stop_index)<Number(trip.stop_count))return error('Mark every extra stop before ending the trip.','stops_remaining',409);
   const km=Number.isFinite(input.final_km)&&Number(input.final_km)>0?Math.min(Number(input.final_km),Number(trip.estimated_km)*1.5):Number(trip.estimated_km);
   const minutes=Math.max(1,Math.round((Date.now()-new Date(trip.started_at).getTime())/60_000));
-  const amount=Math.min(fare({base:Number(trip.base),per_km:Number(trip.per_km),per_min:Number(trip.per_min),minimum:Number(trip.minimum)},km,minutes),Math.round(Number(trip.estimate_rupees)*1.5));
+  const amount=finalFareWithBump({base:Number(trip.base),per_km:Number(trip.per_km),per_min:Number(trip.per_min),minimum:Number(trip.minimum)},
+    km,minutes,Number(trip.customer_fare_bump_rupees),Number(trip.estimate_rupees));
   const discount=Math.min(Number(trip.promo_discount_rupees||0),Math.max(0,amount-1));
   const customerDue=amount-discount;
   const split=settlementForFare(amount,customerDue);

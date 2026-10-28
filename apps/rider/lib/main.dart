@@ -839,7 +839,10 @@ class _OnboardingState extends State<Onboarding> {
       appBar: AppBar(title: Text(app.tr('documents'))),
       body: profile == null
           ? const Center(child: CircularProgressIndicator())
-          : ListView(padding: const EdgeInsets.all(22), children: [
+          : SafeArea(bottom: true, child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 96), children: [
               HaanHeading(app.tr('approval'), accent: mint),
               const SizedBox(height: 12),
               Text(app.tr('${profile!['verification_status'] ?? 'pending'}')),
@@ -911,7 +914,7 @@ class _OnboardingState extends State<Onboarding> {
                             : 'JPEG or PNG, under 500 KB'),
                         onTap: busy ? null : () => upload(kind))),
               if (error != null) HaanError(error!)
-            ]));
+            ])));
 }
 
 class RiderEarnings extends StatefulWidget {
@@ -1046,11 +1049,16 @@ class RiderReceipt extends StatefulWidget {
 class _RiderReceiptState extends State<RiderReceipt> {
   Map<String, dynamic>? trip;
   int stars = 0;
+  bool ratingSubmitted = false, ratingSkipped = false;
   @override
   void initState() {
     super.initState();
     app.api.get('/v1/trips/${widget.id}').then((d) {
-      if (mounted) setState(() => trip = Map<String, dynamic>.from(d['trip']));
+      if (mounted) setState(() {
+        trip = Map<String, dynamic>.from(d['trip']);
+        stars = (trip?['my_rating_stars'] as num?)?.toInt() ?? 0;
+        ratingSubmitted = stars > 0;
+      });
     });
   }
 
@@ -1115,8 +1123,13 @@ class _RiderReceiptState extends State<RiderReceipt> {
                       : 'Check your own UPI app for payment. Haan cannot confirm it.'),
                   ])));
               }),
-              if(trip!['status']=='completed') Text(app.tr('rate')),
-              if(trip!['status']=='completed') Row(
+              if(trip!['status']=='completed' && ratingSubmitted)
+                Text(app.language == 'hi' ? 'आपने ग्राहक को $stars स्टार दिए।'
+                    : 'You rated this customer $stars stars.'),
+              if(trip!['status']=='completed' && !ratingSubmitted && !ratingSkipped)
+                Text(app.language == 'hi' ? 'ग्राहक को रेट करें' : 'Rate your customer',
+                  style: Theme.of(context).textTheme.titleLarge),
+              if(trip!['status']=='completed' && !ratingSubmitted && !ratingSkipped) Row(
                   children: List.generate(
                       5,
                       (i) => IconButton(
@@ -1126,12 +1139,16 @@ class _RiderReceiptState extends State<RiderReceipt> {
                               await app.api.post(
                                   '/v1/trips/${widget.id}/rating',
                                   {'stars': stars});
+                              if (mounted) setState(() => ratingSubmitted = true);
                             } catch (e) {
                               if (context.mounted) showMessage(context, '$e');
                             }
                           },
                           icon: Icon(i < stars ? Icons.star : Icons.star_border,
                               color: mint)))),
+              if(trip!['status']=='completed' && !ratingSubmitted && !ratingSkipped)
+                TextButton(onPressed: () => setState(() => ratingSkipped = true),
+                  child: Text(app.language == 'hi' ? 'अभी छोड़ें' : 'Skip for now')),
               TextButton(
                   onPressed: () => Navigator.push(
                       context,

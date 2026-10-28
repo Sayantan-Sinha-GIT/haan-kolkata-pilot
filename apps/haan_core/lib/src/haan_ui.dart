@@ -44,14 +44,19 @@ class HaanMap extends StatelessWidget {
   final List<LatLng>? routePoints;
   final ValueChanged<LatLng>? onTap;
   final bool lowData;
-  const HaanMap({super.key,required this.center,this.pickup,this.drop,this.rider,this.routePoints,this.onTap,this.lowData=false});
+  final bool fitRoute;
+  const HaanMap({super.key,required this.center,this.pickup,this.drop,this.rider,this.routePoints,this.onTap,this.lowData=false,this.fitRoute=false});
   @override Widget build(BuildContext context){
     final markers=<Marker>[];
     if(pickup!=null)markers.add(Marker(point:pickup!,width:46,height:46,child:const Icon(Icons.trip_origin,color:amber,size:36)));
     if(drop!=null)markers.add(Marker(point:drop!,width:46,height:46,child:const Icon(Icons.location_on,color:Color(0xfffa805d),size:40)));
     if(rider!=null)markers.add(Marker(point:rider!,width:50,height:50,child:const Icon(Icons.two_wheeler,color:mint,size:38)));
     final line=routePoints!=null&&routePoints!.length>=2 ? routePoints! : pickup!=null&&drop!=null ? [pickup!,drop!] : <LatLng>[];
-    return FlutterMap(options:MapOptions(initialCenter:center,initialZoom:13,onTap:onTap==null?null:(_,p)=>onTap!(p)),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',userAgentPackageName:'in.haan.${lowData?'rider':'customer'}',maxNativeZoom:19),if(line.length>=2)PolylineLayer(polylines:[Polyline(points:line,strokeWidth:5,color:Theme.of(context).colorScheme.primary)]),MarkerLayer(markers:markers),const RichAttributionWidget(attributions:[TextSourceAttribution('© OpenStreetMap contributors')])]);
+    final mapKey='${center.latitude.toStringAsFixed(5)},${center.longitude.toStringAsFixed(5)}:${fitRoute ? '${drop?.latitude},${drop?.longitude}' : ''}';
+    return FlutterMap(key:ValueKey(mapKey),options:MapOptions(initialCenter:center,initialZoom:13,
+      initialCameraFit:fitRoute&&line.length>=2 ? CameraFit.coordinates(coordinates:line,
+        padding:EdgeInsets.fromLTRB(30,105,30,MediaQuery.sizeOf(context).height*.60),maxZoom:14) : null,
+      onTap:onTap==null?null:(_,p)=>onTap!(p)),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',userAgentPackageName:'in.haan.${lowData?'rider':'customer'}',maxNativeZoom:19),if(line.length>=2)PolylineLayer(polylines:[Polyline(points:line,strokeWidth:5,color:Theme.of(context).colorScheme.primary)]),MarkerLayer(markers:markers),const RichAttributionWidget(attributions:[TextSourceAttribution('© OpenStreetMap contributors')])]);
   }
 }
 Future<Position?> currentPosition() async {

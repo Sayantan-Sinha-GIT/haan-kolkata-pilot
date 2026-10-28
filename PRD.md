@@ -1,5 +1,11 @@
 # Product Requirements Document: Ride-Hailing Platform
 
+## Booking and app UX update — 28 October 2026
+
+The manual **Book ride** button is the customer's confirmation; it must start matching immediately, with no second confirmation dialog. On opening the booking screen, the app attempts live GPS pickup and labels a successful fix **Your location**. If GPS is unavailable, it asks for a manual pickup and provides a retry control; it must never silently book from the default map centre. The map and bottom sheet show a compact route, readable vehicle choices, fare, and a persistent booking action. The searching screen shows progress, route, fare and actions without long address paragraphs.
+
+While a trip is searching, the customer may add ₹10, ₹20, ₹30 or ₹40 to the offered fare. The backend adds that amount to the customer quote and rider offer, invalidates prior offers, resets the offer count and starts a fresh 90-second search; at most three increases and ₹200 total are allowed. The additional amount is part of the final fare and the 20% Haan fee calculation. An already accepted or ended trip cannot be increased. Cancelling requires choosing a reason **and then** tapping Confirm cancellation. A customer Trips entry is kept for a cancellation only after driver acceptance; unmatched and preaccept cancelled searches stay out of Trips. Completed trips let each side rate the other or explicitly **Skip for now**; a skipped rating may still be given later from Trips. Rider document forms must scroll fully above Android system navigation, including the last insurance/permit upload.
+
 ## Release update — 25 October 2026
 
 The October release expands the complete trip sequence and rider verification. The requirements below supersede older wording about three-document approval and generic map links. Haan retains its own visual identity while using the familiar request, match, pickup, PIN, trip and receipt sequence. The follow-up adds an arrival clock, a five-minute no-show action, direct UPI QR handoff, and safety controls for both participants.
@@ -63,8 +69,8 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F3 | Map, live GPS, permission explainers | Must | Works with GPS off via manual pickup |
 | F4 | Destination search, recents, saved Home/Work | Must | Ola Maps for Indian landmarks; cached |
 | F5 | Fare estimate: Bike, Auto, Cab | Must | Formula in section 9 |
-| F6 | Book, cancel with reason, rebook | Must | Status machine in section 8 |
-| F7 | Matching, one rider at a time | Must | 15 s per offer, max 5, 90 s total |
+| F6 | Book, cancel with reason, rebook | Must | One Book ride tap starts matching. Cancellation requires selecting a reason, then an explicit Confirm cancellation tap. Status machine in section 8 |
+| F7 | Matching, one rider at a time | Must | 15 s per offer, max 5, 90 s total; a fare increase resets the search window and offers |
 | F8 | Live tracking and status banner | Must | Smooth marker with heading |
 | F9 | 4-digit trip PIN | Must | No PIN, no start |
 | F10 | Push notification on every trip change (Firebase) | Must | Works in background |
@@ -79,8 +85,8 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F19 | Users, trips, block, force-cancel, notes | Must | All audit-logged |
 | F20 | Support tickets | Must | Open / In progress / Resolved |
 | F21 | Website: landing, downloads with QR, install guide EN/HI, privacy, terms, contact | Must | No login; admin never linked |
-| F22 | Trip history and receipts | Should | Completed rides show exact customer due and rider earnings; cancelled/unmatched rides show no charge, payment QR or rating; support stays available; cached offline |
-| F23 | Ratings both ways | Should | 1-5 stars, optional comment |
+| F22 | Trip history and receipts | Should | Completed rides show exact customer due and rider earnings. Customer Trips hides unmatched searches and cancellations before rider acceptance, but keeps cancellations after acceptance. No cancelled ride shows a charge, payment QR or rating; support stays available |
+| F23 | Ratings both ways | Should | 1-5 stars each direction after completion; explicit Skip for now leaves rating available later; completed receipt shows a previous rating |
 | F24 | SOS: share live trip link, 112 shortcut | Should | Prompts for emergency contact if missing |
 | F25 | Rider earnings summary | Should | Kolkata-calendar-day/week rider earnings after Haan's fee, today's Haan fee, and separate pending amounts owed to and from Haan; cancelled trips show no earnings; never imply cash or UPI was received without external confirmation |
 | F26 | Low-data mode (rider) | Should | Location every 5 s moving, 15 s idle, batch on poor network |
@@ -106,6 +112,7 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | F46 | Rider self-cancel quota | Must | Three assigned-trip self-cancellations per Asia/Kolkata calendar day; fourth blocked; no-show and customer/admin cancellation do not consume the quota |
 | F47 | Admin case triage | Must | Support priority, category, assigned agent, status, resolution, reply and notes; super admin also manages promotions, settlements, users, riders, trips, scheduled rides, fares and audit |
 | F48 | 20% final-fare commission | Must | On completion, Haan fee is rounded to rupees from the customer's actual final amount due. Rider keeps 80% of the undiscounted trip fare; Haan funds the promotion adjustment. Admin has an auditable pending/settled ledger; status never implies Haan verified direct customer payment |
+| F49 | Customer fare increase during search | Must | +₹10/20/30/40, at most three increases and ₹200 cumulative; stale offers cannot be accepted, a new 90-second match begins, and final fare includes the increase |
 
 ## 6. Main user flows
 
@@ -151,8 +158,10 @@ Ride apps assume English literacy, fast data and comfort with forms. Many Indian
 | Destination not found | Suggest nearby landmarks; allow dropping a map pin |
 | Pickup equals drop, or under 300 m | Block with message |
 | Customer already has an active trip | Show it; block a second booking |
-| GPS off or permission denied | Explainer; customer can pick manually; rider cannot go online |
-| No rider found in 90 s | Message, "Try again" and "Try another vehicle" |
+| GPS off or permission denied | Customer sees an explicit manual pickup and a retry control, with booking blocked until a pickup is chosen; rider cannot go online |
+| No rider found in 90 s | Message and a clear path to book again; the unmatched request does not enter customer Trips |
+| Customer increases fare during search | Expire the old offers, reset the search clock and match again at the updated fare; never accept an old offer |
+| Customer cancels during search | Reason selection alone does nothing; Confirm cancellation ends the search and no Trips entry is added before rider acceptance |
 | Rider app dies mid-trip | Customer sees "Rider connection lost"; admin alerted after 5 min |
 | Customer cancels after acceptance | Free within 2 min; later only a recorded note |
 | Ola, AI or email quota reached | Friendly message; maps fall back to OpenStreetMap; assistant falls back to manual flow |
@@ -206,7 +215,7 @@ Every table: UUID id, created_at, updated_at.
 
 ## 9. Rules that must never break
 
-1. **Fare:** `max(minimum, base + per_km × km + per_min × min)`, rounded to the rupee. Final fare never exceeds estimate × 1.5 unless an admin overrides with a note. Defaults, all editable: Bike ₹20 / ₹6 per km / ₹0.5 per min / min ₹30; Auto ₹30 / ₹10 / ₹1 / min ₹40; Cab ₹50 / ₹14 / ₹1.5 / min ₹80 (default).
+1. **Fare:** `max(minimum, base + per_km × km + per_min × min)`, rounded to the rupee. A customer fare increase during searching adds to the quote, rider offer and metered final amount. Final fare never exceeds the updated estimate × 1.5 unless an admin overrides with a note. Defaults, all editable: Bike ₹20 / ₹6 per km / ₹0.5 per min / min ₹30; Auto ₹30 / ₹10 / ₹1 / min ₹40; Cab ₹50 / ₹14 / ₹1.5 / min ₹80 (default).
 2. **One rider wins:** accepting is one atomic update; two riders can never hold the same trip.
 3. **Matching:** 2 km radius, widening to 5 km after 20 s; 15 s per rider; max 5 offers; 90 s total. Three declines/timeouts in a row set a rider offline.
 4. **PIN:** 4 digits, hashed, new per trip, never shown to the rider.
@@ -232,7 +241,7 @@ Every table: UUID id, created_at, updated_at.
 - Cache common phrase-to-place results per city. Global quota counter; friendly message when exhausted.
 
 **The assistant must never**
-- Book, cancel or pay without explicit on-screen confirmation.
+- Book through the voice assistant without its explicit Haan confirmation; in manual booking, the Book ride tap itself is confirmation. Cancellation requires a selected reason and a separate confirmation tap.
 - Do anything beyond these intents: `book_ride`, `cancel_ride`, `check_status`, `help`, `unknown`.
 - Obey instructions hidden in speech or text (prompt injection is ignored).
 - Receive or reveal phone numbers, full names, exact home addresses or other users' data; it has no database access.
@@ -323,8 +332,12 @@ Also: cache map and search results and respect OpenStreetMap tile rules and attr
 | 29 | Promotion and commission | Admin can create/activate/deactivate; simultaneous bookings cannot exceed the cap; cancellation releases capacity; Haan fee is exactly 20% of customer final fare rounded to rupees; settlement ledger shows rider top-up and manual balance |
 | 30 | Google and email sign-in | Both customer and rider can choose Google or email OTP; forged, expired, wrong-project and non-Google Firebase tokens are rejected; an existing email retains its original role; blocked/deleted users cannot sign in |
 | 31 | Manual trip settlement | Customer receipt shows discounted due, rider receipt shows earnings/fee/top-up/net, admin can mark a completed pending settlement only with an external reference or reason; duplicate and non-admin attempts fail |
-| 30 | Self-cancel quota | Three rider self-cancels succeed in a Kolkata day, fourth fails; remaining count is shown; no-show does not count |
-| 31 | Support triage | Agent can set priority, category, owner, status and resolution; replies and all changes are auditable |
+| 32 | Self-cancel quota | Three rider self-cancels succeed in a Kolkata day, fourth fails; remaining count is shown; no-show does not count |
+| 33 | Support triage | Agent can set priority, category, owner, status and resolution; replies and all changes are auditable |
+| 34 | Fare increase | A searching customer can raise by ₹10/20/30/40, receives a fresh 90-second search and revised offer, and an old offer cannot be accepted; commission uses the raised final fare |
+| 35 | Cancellation and Trips | Selecting a reason does not cancel until Confirm cancellation; only cancelled rides with an assigned driver appear in customer Trips; no-rider outcomes stay hidden |
+| 36 | Pickup and rider form | GPS fix becomes Your location, failure requires manual pickup or retry; rider insurance/permit upload remains reachable above the Android navigation bar |
+| 37 | Two-sided ratings | Customer and rider can rate after completion or Skip for now; a previous rating is shown and duplicate submission is blocked |
 
 ## 17. Open questions
 
